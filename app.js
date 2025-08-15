@@ -143,6 +143,7 @@ saveState(); // Save the initial state
 let currentParam = null;
 const routes=[
   {id:'dash',title:'لوحة التحكم',render:renderDash, tab: true},
+  {id:'old-dash',title:'لوحة التحكم القديمة',render:renderOldDash, tab: false}, // Hidden for now
   {id:'customers',title:'العملاء',render:renderCustomers, tab: true},
   {id:'units',title:'الوحدات',render:renderUnits, tab: true},
   {id:'contracts',title:'العقود',render:renderContracts, tab: true},
@@ -319,8 +320,129 @@ function generatePartnerLedger(partnerId) {
     return transactions.sort((a,b) => (a.date||'').localeCompare(b.date||''));
 }
 
-/* ===== لوحة التحكم ===== */
-function renderDash(){
+function calculateKpis(filter = {}) {
+  const { from, to } = filter;
+  let contracts = state.contracts;
+  let payments = state.payments;
+
+  if (from) {
+    contracts = contracts.filter(c => c.start >= from);
+    payments = payments.filter(p => p.date >= from);
+  }
+  if (to) {
+    contracts = contracts.filter(c => c.start <= to);
+    payments = payments.filter(p => p.date <= to);
+  }
+
+  const totalSales = contracts.reduce((sum, c) => sum + Number(c.totalPrice || 0), 0);
+  const downPayments = contracts.reduce((sum, c) => sum + Number(c.downPayment || 0), 0);
+  const otherPayments = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const totalReceipts = downPayments + otherPayments;
+
+  const totalDebt = state.units.reduce((sum, u) => sum + calcRemaining(u), 0);
+
+  const collectionPercentage = totalSales > 0 ? (totalReceipts / totalSales) * 100 : 0;
+
+  const totalExpenses = contracts.reduce((sum, c) => sum + Number(c.brokerAmount || 0), 0);
+
+  const netProfit = totalReceipts - totalExpenses;
+
+  const unitCounts = {
+    total: state.units.length,
+    available: state.units.filter(u=>u.status==='متاحة').length,
+    sold: state.units.filter(u=>u.status==='مباعة').length,
+    reserved: state.units.filter(u=>u.status==='محجوزة').length,
+  };
+
+  const investorCount = state.partners.length;
+
+  return {
+    totalSales, totalReceipts, totalDebt, collectionPercentage,
+    totalExpenses, netProfit, unitCounts, investorCount
+  };
+}
+
+/* ===== لوحة التحكم الجديدة ===== */
+function renderDash() {
+  const kpis = calculateKpis();
+
+  view.innerHTML = `
+    <div class="panel">
+      <div class="header">
+        <h2>لوحة تحكم المشروع</h2>
+        <div class="tools">
+          <input type="date" id="dash-from" class="input">
+          <input type="date" id="dash-to" class="input">
+          <button class="btn" id="dash-apply">تطبيق</button>
+          <button class="btn secondary" id="dash-reset">إعادة تعيين</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+        <h3>المؤشرات الرئيسية (KPIs)</h3>
+        <div id="kpi-container" class="grid grid-4" style="margin-top:10px;">
+            <div class="card"><h4>إجمالي المبيعات</h4><div class="big">${egp(kpis.totalSales)}</div></div>
+            <div class="card"><h4>إجمالي المتحصلات</h4><div class="big">${egp(kpis.totalReceipts)}</div></div>
+            <div class="card"><h4>إجمالي المديونية</h4><div class="big">${egp(kpis.totalDebt)}</div></div>
+            <div class="card"><h4>نسبة التحصيل</h4><div class="big">${kpis.collectionPercentage.toFixed(1)}%</div></div>
+            <div class="card"><h4>إجمالي المصروفات</h4><div class="big">${egp(kpis.totalExpenses)}</div></div>
+            <div class="card"><h4>صافي الربح</h4><div class="big">${egp(kpis.netProfit)}</div></div>
+            <div class="card"><h4>عدد الوحدات</h4><div class="big">${kpis.unitCounts.total} (<span style="color:var(--ok)">${kpis.unitCounts.available}</span> | <span style="color:var(--warn)">${kpis.unitCounts.sold}</span>)</div></div>
+            <div class="card"><h4>عدد المستثمرين</h4><div class="big">${kpis.investorCount}</div></div>
+        </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:16px; gap:16px; align-items:flex-start;">
+        <div class="panel">
+            <h3>ملخص المستثمرين</h3>
+            <div id="investor-summary-table">
+                <!-- Investor summary table will go here -->
+                <p style="color:var(--muted); font-size:12px;">سيتم عرض ملخص أداء المستثمرين هنا.</p>
+            </div>
+        </div>
+        <div class="panel">
+            <h3>أحدث الحركات المالية</h3>
+            <div id="financial-movements-table">
+                <!-- Financial movements table will go here -->
+                <p style="color:var(--muted); font-size:12px;">سيتم عرض أحدث الحركات المالية هنا.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+        <h3>الأقساط</h3>
+        <div id="installments-due-table">
+            <!-- Due installments table will go here -->
+            <p style="color:var(--muted); font-size:12px;">سيتم عرض الأقساط المستحقة والمتأخرة هنا.</p>
+        </div>
+    </div>
+
+     <div class="grid grid-3" style="margin-top:16px; gap:16px;">
+        <div class="panel">
+            <h3>المبيعات مقابل التحصيلات</h3>
+            <div id="sales-vs-receipts-chart">
+                 <!-- Sales vs Receipts chart will go here -->
+            </div>
+        </div>
+        <div class="panel">
+            <h3>توزيع المصروفات</h3>
+            <div id="expense-distribution-chart">
+                 <!-- Expense chart will go here -->
+            </div>
+        </div>
+        <div class="panel">
+            <h3>حالة الوحدات</h3>
+            <div id="unit-status-chart">
+                 <!-- Unit status chart will go here -->
+            </div>
+        </div>
+    </div>
+  `;
+}
+
+/* ===== لوحة التحكم القديمة ===== */
+function renderOldDash(){
   const total=state.units.length, avail=state.units.filter(u=>u.status==='متاحة').length, sold=state.units.filter(u=>u.status==='مباعة').length, ret=state.units.filter(u=>u.status==='مرتجعة').length;
   const revenue=state.payments.reduce((s,p)=>s+Number(p.amount||0),0);
   const now=new Date(); const proj={};
