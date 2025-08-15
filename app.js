@@ -93,8 +93,10 @@ function load(){
       });
     }
 
+    s.auditLog = s.auditLog || [];
+
     return {
-      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [],
+      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [],
       settings:{theme:'dark',font:16},locked:false,
       ...s
     };
@@ -106,6 +108,14 @@ function load(){
 function persist(){ localStorage.setItem(APPKEY, JSON.stringify(state)); applySettings(); }
 function uid(p){ return p+'-'+Math.random().toString(36).slice(2,9); }
 function today(){ return new Date().toISOString().slice(0,10); }
+function logAction(description, details = {}) {
+    state.auditLog.push({
+        id: uid('LOG'),
+        timestamp: new Date().toISOString(),
+        description,
+        details
+    });
+}
 const fmt = new Intl.NumberFormat('ar-EG'); function egp(v){ v=Number(v||0); return isFinite(v)?fmt.format(v)+' ج.م':'' }
 function applySettings(){ document.documentElement.setAttribute('data-theme', state.settings.theme||'dark'); document.documentElement.style.fontSize=(state.settings.font||16)+'px'; }
 applySettings();
@@ -144,6 +154,7 @@ const routes=[
   {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: true},
   {id:'safes', title:'إدارة الخزن', render:renderSafes, tab: true},
   {id:'transfers', title: 'التحويلات', render: renderTransfers, tab: true},
+  {id:'audit', title: 'سجل التغييرات', render: renderAuditLog, tab: true},
   {id:'backup',title:'نسخة احتياطية',render:renderBackup, tab: true},
   {id:'unit-details', title:'تفاصيل الوحدة', render:renderUnitDetails, tab: false},
 ];
@@ -476,6 +487,7 @@ function renderCustomers(){
 
     saveState();
     const newCustomer = { id: uid('C'), name, phone, nationalId, address, status, notes };
+    logAction('إضافة عميل جديد', { id: newCustomer.id, name: newCustomer.name });
     state.customers.push(newCustomer);
     persist();
 
@@ -518,8 +530,42 @@ function renderCustomers(){
 
   draw();
 }
-window.inlineUpd=(coll,id,key,val)=>{ saveState(); const o=state[coll].find(x=>x.id===id); if(o){ o[key]=val; persist(); } };
-window.delRow=(coll,id)=>{ if(confirm('هل أنت متأكد من الحذف؟ هذا الإجراء لا يمكن التراجع عنه.')){ saveState(); state[coll]=state[coll].filter(x=>x.id!==id); persist(); nav(''+coll); } };
+window.inlineUpd=(coll,id,key,val)=>{
+  saveState();
+  const o=state[coll].find(x=>x.id===id);
+  if(o){
+    const oldValue = o[key];
+    o[key]=val;
+    logAction(`تعديل مباشر في ${coll}`, { collection: coll, id, key, oldValue, newValue: val });
+    persist();
+  }
+};
+window.delRow=(coll,id)=>{
+  const nameMap = {
+    customers: 'العميل',
+    units: 'الوحدة',
+    partners: 'الشريك',
+    unitPartners: 'ربط شريك بوحدة',
+    contracts: 'العقد',
+    installments: 'القسط',
+    safes: 'الخزنة'
+  };
+  const collName = nameMap[coll] || coll;
+  const itemToDelete = state[coll] ? state[coll].find(x=>x.id===id) : undefined;
+  const itemName = itemToDelete?.name || itemToDelete?.code || id;
+
+  if(confirm(`هل أنت متأكد من حذف ${collName} "${itemName}"؟ هذا الإجراء لا يمكن التراجع عنه.`)){
+    saveState();
+    logAction(`حذف ${collName}`, { collection: coll, id, deletedItem: JSON.stringify(itemToDelete) });
+    state[coll]=state[coll].filter(x=>x.id!==id);
+    persist();
+    if (coll === 'unitPartners') {
+      renderUnitDetails(itemToDelete.unitId);
+    } else {
+      nav(coll);
+    }
+  }
+};
 
 function deleteUnit(unitId) {
   const isLinked = state.contracts.some(c => c.unitId === unitId);
@@ -664,6 +710,7 @@ function renderUnits(){
       id:uid('U'), code, name, status, area, floor, building, notes,
       plans: [{ id: uid('PL'), name: planName, price: planPrice }]
     };
+    logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code });
     state.units.push(newUnit);
     persist();
     draw();
@@ -737,7 +784,9 @@ function renderSafes(){
       }
 
       saveState();
-      state.safes.push({ id: uid('S'), name, balance });
+      const newSafe = { id: uid('S'), name, balance };
+      logAction('إضافة خزنة جديدة', { safeId: newSafe.id, name, initialBalance: balance });
+      state.safes.push(newSafe);
       persist();
 
       document.getElementById('s-name').value = '';
@@ -915,17 +964,15 @@ function renderUnitDetails(unitId){
     if(!partnerId || !(percent > 0)) return alert('الرجاء اختيار شريك وإدخال نسبة صحيحة.');
     if(state.unitPartners.some(up => up.unitId === unitId && up.partnerId === partnerId)) return alert('هذا الشريك تم إضافته بالفعل لهذه الوحدة.');
     saveState();
-    state.unitPartners.push({id: uid('UP'), unitId, partnerId, percent});
+    const link = {id: uid('UP'), unitId, partnerId, percent};
+    logAction('ربط شريك بوحدة', { unitId, partnerId, percent });
+    state.unitPartners.push(link);
     persist();
     drawPartners();
   };
 
   window.removePartnerFromUnit = (linkId) => {
-    if(!confirm('هل أنت متأكد من حذف هذا الشريك من الوحدة؟')) return;
-    saveState();
-    state.unitPartners = state.unitPartners.filter(up => up.id !== linkId);
-    persist();
-    drawPartners();
+    delRow('unitPartners', linkId);
   };
 
   window.addPlanToUnit = (unitId) => {
@@ -937,7 +984,9 @@ function renderUnitDetails(unitId){
     if (unit.plans.some(p => p.name.toLowerCase() === name.toLowerCase())) return alert('خطة بنفس الاسم موجودة بالفعل.');
 
     saveState();
-    unit.plans.push({ id: uid('PL'), name, price });
+    const newPlan = { id: uid('PL'), name, price };
+    logAction('إضافة خطة سعر لوحدة', { unitId, planName: name, price });
+    unit.plans.push(newPlan);
     persist();
     drawPlans();
     document.getElementById('ud-plan-name').value = '';
@@ -945,20 +994,26 @@ function renderUnitDetails(unitId){
   };
 
   window.removePlanFromUnit = (planId) => {
-    if(!confirm('هل أنت متأكد من حذف خطة السعر هذه؟')) return;
-    saveState();
-    u.plans = u.plans.filter(p => p.id !== planId);
-    persist();
-    drawPlans();
+    const plan = u.plans.find(p => p.id === planId);
+    const unitId = u.id;
+    if(confirm(`هل أنت متأكد من حذف خطة السعر "${plan.name}"؟`)){
+      saveState();
+      logAction('حذف خطة سعر من وحدة', { unitId, planId, deletedPlan: JSON.stringify(plan) });
+      u.plans = u.plans.filter(p => p.id !== planId);
+      persist();
+      drawPlans();
+    }
   };
 
   window.editPlanProp = (planId, key, value, isNumber = false) => {
     const plan = u.plans.find(p => p.id === planId);
     if (plan) {
+      const oldValue = plan[key];
+      const newValue = isNumber ? parseNumber(value) : value;
       saveState();
-      plan[key] = isNumber ? parseNumber(value) : value;
+      logAction('تعديل خطة سعر', { unitId: u.id, planId, key, oldValue, newValue });
+      plan[key] = newValue;
       persist();
-      // No redraw needed for inline edit, but we could redraw to re-format the number
       drawPlans();
     }
   };
@@ -968,17 +1023,16 @@ function renderUnitDetails(unitId){
 }
 
 function deleteContract(contractId) {
-    if (!confirm('هل أنت متأكد من حذف هذا العقد؟ سيتم حذف جميع الأقساط والمدفوعات المرتبطة به.')) return;
-
     const contract = state.contracts.find(c => c.id === contractId);
     if (!contract) {
-        alert('لم يتم العثور على العقد.');
-        return;
+      alert('لم يتم العثور على العقد.');
+      return;
     }
+    if (!confirm(`هل أنت متأكد من حذف العقد ${contract.code}؟ سيتم حذف جميع الأقساط والمدفوعات المرتبطة به.`)) return;
 
     const unitId = contract.unitId;
-
     saveState();
+    logAction('حذف عقد وكل ما يتعلق به', { contractId, unitId, deletedContract: JSON.stringify(contract) });
 
     // 1. Delete all payments for the unit
     state.payments = state.payments.filter(p => p.unitId !== unitId);
@@ -1105,6 +1159,7 @@ function renderContracts(){
 
     const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
     const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, planId, planName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
+    logAction('إنشاء عقد جديد', { contractId: ct.id, unitId, customerId, price: total });
     state.contracts.push(ct);
 
     // توليد الأقساط
@@ -1327,21 +1382,28 @@ function renderInstallments(){
       if (processPayment(i.unitId, paid, 'قسط', today(), selectedSafe.id, i.id)) {
         persist();
         __inst_draw();
+      } else {
+        undo();
       }
     } finally {
         if (btn) setTimeout(() => { btn.disabled = false; }, 200);
     }
   };
   window.reschedule = function(id){
-    saveState();
     const i = state.installments.find(x=>x.id===id); if(!i) return;
+    const oldDetails = { amount: i.amount, dueDate: i.dueDate };
+
+    const newAmt = Number(prompt('قيمة القسط الجديدة', i.amount) || i.amount);
+    const newDate = prompt('تاريخ الاستحقاق الجديد (YYYY-MM-DD)', i.dueDate || '') || i.dueDate;
+
+    if (newAmt === oldDetails.amount && newDate === oldDetails.dueDate) return; // No change
+
+    saveState();
     const unitId = i.unitId;
     const remainList = state.installments
       .filter(x=>x.unitId===unitId && x.status!=='مدفوع')
       .sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''));
     const idx = remainList.findIndex(x=>x.id===id);
-    const newAmt = Number(prompt('قيمة القسط الجديدة', i.amount) || i.amount);
-    const newDate = prompt('تاريخ الاستحقاق الجديد (YYYY-MM-DD)', i.dueDate || '') || i.dueDate;
     const diff = Math.round((i.amount - newAmt) * 100) / 100;
     if (typeof i.originalAmount !== 'number') i.originalAmount = i.amount;
     i.amount = newAmt; i.dueDate = newDate;
@@ -1351,43 +1413,35 @@ function renderInstallments(){
       if (typeof x.originalAmount !== 'number') x.originalAmount = x.amount;
       x.amount = Math.round((x.amount + share) * 100) / 100;
     });
-    persist(); __inst_draw();
+
+    logAction('إعادة جدولة قسط', { installmentId: id, oldDetails, newAmount: newAmt, newDueDate: newDate, distributedDiff: diff });
+    persist();
+    __inst_draw();
     alert('تمت إعادة الجدولة وتوزيع الفرق على الأقساط التالية.');
   };
   window.simpleEditInstallment = function(id) {
     const i = state.installments.find(x => x.id === id);
-    if (!i) {
-        return alert('لم يتم العثور على القسط.');
-    }
+    if (!i) return alert('لم يتم العثور على القسط.');
 
+    const oldDetails = { amount: i.amount, dueDate: i.dueDate };
     const newAmtStr = prompt('أدخل المبلغ الجديد للقسط:', i.amount);
-    if (newAmtStr === null) return; // User cancelled
-
+    if (newAmtStr === null) return;
     const newAmt = parseNumber(newAmtStr);
-    if (isNaN(newAmt) || newAmt <= 0) {
-        return alert('الرجاء إدخال مبلغ صحيح.');
-    }
+    if (isNaN(newAmt) || newAmt <= 0) return alert('الرجاء إدخال مبلغ صحيح.');
 
     const newDateStr = prompt('أدخل تاريخ الاستحقاق الجديد (YYYY-MM-DD):', i.dueDate);
-    if (newDateStr === null) return; // User cancelled
+    if (newDateStr === null) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDateStr)) return alert('صيغة التاريخ غير صحيحة. الرجاء استخدام YYYY-MM-DD.');
 
-    // Corrected regex for date format validation
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDateStr)) {
-        return alert('صيغة التاريخ غير صحيحة. الرجاء استخدام YYYY-MM-DD.');
-    }
+    if (newAmt === oldDetails.amount && newDateStr === oldDetails.dueDate) return; // No change
 
-    saveState(); // Record state for undo
-
+    saveState();
+    logAction('تعديل بسيط لقسط', { installmentId: id, oldAmount: oldDetails.amount, newAmount: newAmt, oldDueDate: oldDetails.dueDate, newDueDate: newDateStr });
     i.amount = newAmt;
     i.dueDate = newDateStr;
-
-    // If originalAmount was tracked, we should respect it.
-    // If the new amount is less than the original, it implies a partial payment was made, which is not what this function is for.
-    // Let's assume editing resets the 'originalAmount' to the new amount.
     if (typeof i.originalAmount === 'number') {
         i.originalAmount = newAmt;
     }
-
     persist();
     __inst_draw();
     alert('تم تعديل القسط بنجاح.');
@@ -1495,7 +1549,6 @@ function renderPayments(){
       const safeName = (state.safes.find(s=>s.id===safeId)||{}).name||'—';
       printHTML('إيصال دفع', `<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(unitId)}</p><p>المبلغ: ${egp(amount)}</p><p>الطريقة: ${method}</p><p>الخزنة: ${safeName}</p><p>التاريخ: ${date}</p>`);
     } else {
-      // If processPayment fails, it reverts its own state changes, but we still need to undo the saveState
       undo();
     }
   };
@@ -1556,8 +1609,11 @@ function renderPartners(){
   </div>`;
   window.addPartner=()=>{
     const name=document.getElementById('pr-name').value.trim(); if(!name) return;
+    const phone = document.getElementById('pr-phone').value;
     saveState();
-    state.partners.push({id:uid('PR'),name,phone:document.getElementById('pr-phone').value});
+    const newPartner = {id:uid('PR'),name,phone};
+    logAction('إضافة شريك جديد', { partnerId: newPartner.id, name });
+    state.partners.push(newPartner);
     persist(); nav('partners');
   };
   window.addUnitPartner=()=>{
@@ -2046,14 +2102,16 @@ function renderTransfers(){
     toSafe.balance += amount;
 
     // Record the transaction
-    state.transfers.push({
+    const newTransfer = {
       id: uid('T'),
       fromSafeId,
       toSafeId,
       amount,
       date,
       notes
-    });
+    };
+    logAction('تنفيذ تحويل بين الخزن', newTransfer);
+    state.transfers.push(newTransfer);
 
     persist();
     alert('تم تنفيذ التحويل بنجاح!');
@@ -2061,6 +2119,29 @@ function renderTransfers(){
   };
 
   draw();
+}
+
+/* ===== سجل التغييرات ===== */
+function renderAuditLog(){
+  view.innerHTML = `
+    <div class="card">
+      <h3>سجل تتبع التغييرات</h3>
+      <p>يعرض هذا السجل آخر 200 إجراء تم في النظام.</p>
+      <div id="audit-list"></div>
+    </div>
+  `;
+
+  const logs = state.auditLog.slice(-200).reverse(); // Get last 200 and reverse to show newest first
+  const rows = logs.map(log => {
+    const time = new Date(log.timestamp).toLocaleString('ar-EG');
+    return [
+      time,
+      log.description,
+      `<pre style="white-space:pre-wrap;font-size:11px;max-width:400px;word-break:break-all;">${JSON.stringify(log.details, null, 2)}</pre>`
+    ];
+  });
+
+  document.getElementById('audit-list').innerHTML = table(['الوقت والتاريخ', 'الإجراء', 'التفاصيل'], rows);
 }
 
 /* ===== نسخة احتياطية ===== */
