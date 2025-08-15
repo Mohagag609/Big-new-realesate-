@@ -244,68 +244,6 @@ function custById(id){ return state.customers.find(c=>c.id===id); }
 function partnerById(id){ return state.partners.find(p=>p.id===id); }
 function unitCode(id){ return (unitById(id)||{}).code||'—'; }
 
-function processPayment(unitId, amount, method, date, safeId, installmentId = null) {
-  const safe = state.safes.find(s => s.id === safeId);
-  if (!safe) {
-      alert('خطأ: لم يتم العثور على الخزنة المحددة.');
-      return false;
-  }
-
-  // Always add the full amount to the safe balance first.
-  safe.balance = (safe.balance || 0) + amount;
-
-  // If the payment is for an installment, handle the distribution logic.
-  if (installmentId) {
-      let remainingToPay = amount;
-      const allUnitInstallments = state.installments
-          .filter(inst => inst.unitId === unitId && inst.status !== 'مدفوع')
-          .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
-
-      const startIndex = allUnitInstallments.findIndex(inst => inst.id === installmentId);
-      if (startIndex === -1) {
-          alert('القسط المختار غير صالح للدفع (قد يكون مدفوعًا بالفعل).');
-          safe.balance -= amount; // Revert balance change
-          return false;
-      }
-
-      for (let j = startIndex; j < allUnitInstallments.length; j++) {
-          if (remainingToPay <= 0) break;
-
-          const currentInst = allUnitInstallments[j];
-          const amountToApply = Math.min(remainingToPay, currentInst.amount);
-
-          if (typeof currentInst.originalAmount !== 'number') {
-            currentInst.originalAmount = currentInst.amount;
-          }
-
-          currentInst.amount -= amountToApply;
-          remainingToPay -= amountToApply;
-
-          const paymentForInst = {
-              id: uid('P'), unitId, amount: amountToApply,
-              method: j === startIndex ? method : 'ترحيل',
-              date, installmentId: currentInst.id, safeId
-          };
-          state.payments.push(paymentForInst);
-
-          if (currentInst.amount <= 0) {
-              currentInst.status = 'مدفوع';
-              currentInst.paymentDate = date;
-          }
-      }
-
-      if (remainingToPay > 0) {
-          alert(`تم سداد جميع الأقساط المتاحة. المبلغ الفائض ${egp(remainingToPay)} لم يتم ترحيله لعدم وجود أقساط أخرى.`);
-          const surplusPayment = {id:uid('P'), unitId, amount: remainingToPay, method: 'فائض', date, safeId};
-          state.payments.push(surplusPayment);
-      }
-  } else {
-     // This is a general payment not linked to an installment
-     const p = {id:uid('P'), unitId, amount, method, date, safeId};
-     state.payments.push(p);
-  }
-  return true;
-}
 
 function generatePartnerLedger(partnerId) {
     const transactions = [];
@@ -393,14 +331,18 @@ function renderDash(){
     <div class="grid grid-3">
         <div class="card">
             <h3>نظرة عامة على الوحدات</h3>
-            <canvas id="unitsChart" height="120"></canvas>
+            <div class="chart-container" style="position: relative; height:160px; width:100%">
+              <canvas id="unitsChart"></canvas>
+            </div>
         </div>
         <div class="card"><h3>إجمالي الوحدات</h3><div class="big">${total}</div></div>
         <div class="card"><h3>إجمالي المتحصلات</h3><div class="big">${egp(revenue)}</div></div>
     </div>
     <div class="card" style="margin-top:10px">
       <h3>التدفقات النقدية المتوقعة (6 أشهر)</h3>
-      <canvas id="cashflowChart" height="120"></canvas>
+       <div class="chart-container" style="position: relative; height:160px; width:100%">
+          <canvas id="cashflowChart"></canvas>
+      </div>
       <div class="tools"><button class="btn" onclick="printProjection()">طباعة PDF</button></div>
     </div>`;
 
