@@ -1,28 +1,26 @@
 <!doctype html>
 <html lang="ar" dir="rtl" data-theme="dark">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>مدير الاستثمار العقاري — النسخة النهائية (محلي) — محدثة</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مدير الاستثمار العقاري — النسخة النهائية (محلي) — محدثة</title>
+  <link rel="stylesheet" href="src/css/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
-<div class="container">
-  <div class="header">
-    <div class="brand"><div class="logo">🏛️</div><h1>مدير الاستثمار العقاري — النسخة النهائية</h1></div>
-    <div class="tools">
-      <select class="select" id="themeSel"><option value="dark">داكن</option><option value="light">فاتح</option></select>
-      <select class="select" id="fontSel"><option value="14">خط 14</option><option value="16" selected>خط 16</option><option value="18">خط 18</option></select>
-      <button class="btn secondary" id="lockBtn">🔒 قفل</button>
+  <div class="container">
+    <div class="header">
+      <div class="brand"><div class="logo">🏛️</div><h1>مدير الاستثمار العقاري — النسخة النهائية</h1></div>
+      <div class="tools">
+        <select class="select" id="themeSel"><option value="dark">داكن</option><option value="light">فاتح</option></select>
+        <select class="select" id="fontSel"><option value="14">خط 14</option><option value="16" selected>خط 16</option><option value="18">خط 18</option></select>
+        <button class="btn secondary" id="lockBtn">🔒 قفل</button>
+      </div>
     </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="panel" id="view"></div>
+    <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:10px">💾 LocalStorage • PDF/CSV • بحث/فرز/تعديل مباشر • أقساط مرنة • عمولة/صيانة • تدفقات نقدية • فلاتر تاريخ للتقارير</div>
   </div>
-  <div class="tabs" id="tabs"></div>
-  <div class="panel" id="view"></div>
-  <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:10px">💾 LocalStorage • PDF/CSV • بحث/فرز/تعديل مباشر • أقساط مرنة • عمولة/صيانة • تدفقات نقدية • فلاتر تاريخ للتقارير</div>
-</div>
-
-<script src="app.js" defer></script>
+  <script type="module" src="src/js/main.js"></script>
 </body>
 </html>
