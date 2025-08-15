@@ -389,26 +389,60 @@ function renderDash(){
   state.installments.filter(i=>i.status!=='مدفوع' && i.dueDate && new Date(i.dueDate)>=now).forEach(i=>{ const ym=i.dueDate.slice(0,7); proj[ym]=(proj[ym]||0)+Number(i.amount||0); });
   const projRows=Object.keys(proj).sort().slice(0,6).map(k=>[k, proj[k]]);
 
-  const unitChartData = [
-    { value: avail, color: '#2563eb', label: 'متاحة' },
-    { value: sold, color: '#16a34a', label: 'مباعة' },
-    { value: ret, color: '#ef4444', label: 'مرتجعة' }
-  ];
-
   view.innerHTML=`
     <div class="grid grid-3">
         <div class="card">
             <h3>نظرة عامة على الوحدات</h3>
-            ${createDonutChart(unitChartData)}
+            <canvas id="unitsChart" height="120"></canvas>
         </div>
         <div class="card"><h3>إجمالي الوحدات</h3><div class="big">${total}</div></div>
         <div class="card"><h3>إجمالي المتحصلات</h3><div class="big">${egp(revenue)}</div></div>
     </div>
     <div class="card" style="margin-top:10px">
       <h3>التدفقات النقدية المتوقعة (6 أشهر)</h3>
-      ${createBarChart(projRows)}
+      <canvas id="cashflowChart" height="120"></canvas>
       <div class="tools"><button class="btn" onclick="printProjection()">طباعة PDF</button></div>
     </div>`;
+
+  // Units Doughnut Chart
+  new Chart(document.getElementById('unitsChart').getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: ['متاحة', 'مباعة', 'مرتجعة'],
+      datasets: [{
+        data: [avail, sold, ret],
+        backgroundColor: ['#2563eb', '#16a34a', '#ef4444'],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: {font: { family: 'system-ui' }} } }
+    }
+  });
+
+  // Cashflow Bar Chart
+  new Chart(document.getElementById('cashflowChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: projRows.map(r => r[0]),
+      datasets: [{
+        label: 'التدفق المتوقع',
+        data: projRows.map(r => r[1]),
+        backgroundColor: '#2563eb',
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { callback: value => egp(value).replace('ج.م', '') } },
+        x: { ticks: {font: { family: 'system-ui' }} }
+      }
+    }
+  });
 }
 window.printProjection=()=>{
   const now=new Date(); const proj={};
@@ -1758,17 +1792,66 @@ function renderReports(){
     };
   });
 
-  document.getElementById('generate-report-btn').onclick = () => {
+  const generateBtn = document.getElementById('generate-report-btn');
+  const resetBtn = document.getElementById('reset-filters-btn');
+
+  function triggerReport() {
+    if (selectedReportType) {
+      runReport(selectedReportType);
+    }
+  }
+
+  generateBtn.onclick = () => {
     if (!selectedReportType) {
       return alert('الرجاء اختيار نوع التقرير أولاً.');
     }
-    runReport(selectedReportType);
+    triggerReport();
   };
 
-  document.getElementById('reset-filters-btn').onclick = () => {
-    filtersContainer.querySelectorAll('input, select').forEach(el => el.value = '');
-    document.getElementById('rep-out').innerHTML = ''; // Also clear report output
+  resetBtn.onclick = () => {
+    filtersContainer.querySelectorAll('input, select').forEach(el => {
+      el.value = '';
+      el.onchange = null; // Clear old listeners
+    });
+    document.getElementById('rep-out').innerHTML = '';
   };
+
+  // Attach dynamic listeners when filters are created
+  const attachListeners = () => {
+    filtersContainer.querySelectorAll('input, select').forEach(el => {
+      el.onchange = triggerReport;
+    });
+  };
+
+  document.querySelectorAll('.report-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.report-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedReportType = btn.dataset.type;
+
+      // Dynamically render filters based on report type
+      filtersContainer.innerHTML = ''; // Clear previous
+      const needsDates = ['payments_monthly', 'cashflow', 'partner_profits', 'inst_due', 'inst_overdue', 'cust_activity', 'partner_cashflow', 'partner_summary'];
+      const needsPartner = ['partner_profits', 'partner_cashflow', 'partner_summary'];
+
+      if (needsDates.includes(selectedReportType)) {
+        filtersContainer.innerHTML += `
+            <input type="date" class="input" id="rep-from" placeholder="من تاريخ">
+            <input type="date" class="input" id="rep-to" placeholder="إلى تاريخ">
+        `;
+      }
+      if (needsPartner.includes(selectedReportType) && selectedReportType !== 'partner_summary') { // partner_summary is for all partners
+        filtersContainer.innerHTML += `
+          <select id="rep-partner-sel" class="select">
+              <option value="">اختر شريك...</option>
+              ${state.partners.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+          </select>
+        `;
+      }
+      // Attach listeners to the newly created filters
+      attachListeners();
+    };
+  });
 }
 
 /* ===== ديون الشركاء ===== */
@@ -1900,8 +1983,32 @@ window.runReport=(type)=>{
       let pays=state.payments.slice();
       if(from) pays=pays.filter(p=>p.date>=from); if(to) pays=pays.filter(p=>p.date<=to);
       const months={}; pays.forEach(p=>{ const ym=p.date.slice(0,7); months[ym]=(months[ym]||0)+Number(p.amount||0); });
-      rows=Object.keys(months).sort().map(k=>[k,egp(months[k])]);
-      break;
+      const reportData = Object.keys(months).sort().map(k=>({month: k, total: months[k]}));
+      rows=reportData.map(r=>[r.month, egp(r.total)]);
+
+      lastReportData = { title, headers, rows: reportData.map(r=>[r.month, r.total]) }; // Store raw data for charting
+      const bodyHTML=`<canvas id="reportChart" height="150"></canvas><hr><h1>${title}</h1>`+table(headers,rows);
+      out.innerHTML=bodyHTML + `<div class="tools"><button class="btn" onclick="printLastReport()">طباعة PDF</button></div>`;
+
+      // Render chart
+      new Chart(document.getElementById('reportChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: reportData.map(r => r.month),
+          datasets: [{
+            label: 'إجمالي المدفوعات',
+            data: reportData.map(r => r.total),
+            backgroundColor: '#16a34a',
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { ticks: { callback: value => egp(value).replace('ج.م', '') } } }
+        }
+      });
+      return; // Exit here as we manually set innerHTML
     case 'partner_summary':
       title = 'ملخص أرباح الشركاء';
       headers = ['الشريك', 'إجمالي الدخل', 'إجمالي المصروفات', 'صافي الربح'];
@@ -2359,53 +2466,6 @@ window.openContractDetails = function(id) {
     view.innerHTML = html;
 };
 
-/* ===== Charting Helpers ===== */
-function createDonutChart(items) { // e.g., [{value, color, label}]
-    const total = items.reduce((s, i) => s + i.value, 0);
-    if (total === 0) return '<div style="text-align:center; padding: 20px; color: var(--muted);">لا توجد بيانات لعرضها</div>';
-
-    const gradientParts = [];
-    let currentDeg = 0;
-    items.forEach(item => {
-        const percent = item.value / total * 100;
-        if(percent > 0) {
-          gradientParts.push(`${item.color} ${currentDeg}deg ${currentDeg + percent * 3.6}deg`);
-        }
-        currentDeg += percent * 3.6;
-    });
-
-    const legend = items.map(i => `
-      <div style="display:flex; align-items:center; gap: 6px; margin-bottom: 4px;">
-        <div style="width:12px; height:12px; background-color:${i.color}; border-radius: 3px;"></div>
-        <div>${i.label}: <strong>${i.value}</strong></div>
-      </div>
-    `).join('');
-
-    return `
-        <div style="display:flex; align-items:center; gap:20px; margin-top:10px;">
-            <div style="width:100px; height:100px; border-radius:50%; background:conic-gradient(${gradientParts.join(',')});"></div>
-            <div style="font-size:13px;">${legend}</div>
-        </div>`;
-}
-
-function createBarChart(rows) { // e.g., [['Label', value], ...]
-    if (!rows.length) return '<div style="text-align:center; padding: 20px; color: var(--muted);">لا توجد بيانات لعرضها</div>';
-
-    const maxVal = Math.max(...rows.map(r => r[1]));
-    if (maxVal === 0) return '<div style="text-align:center; padding: 20px; color: var(--muted);">لا توجد تدفقات نقدية قادمة</div>';
-
-    const bars = rows.map((r, i) => {
-        const percent = (r[1] / maxVal) * 100;
-        return `
-            <g transform="translate(${i * 55 + 10}, 0)">
-                <title>${r[0]}: ${egp(r[1])}</title>
-                <rect y="${100 - percent}" width="40" height="${percent}" fill="var(--brand)" rx="4"></rect>
-                <text x="20" y="115" text-anchor="middle" fill="var(--muted)" font-size="10">${r[0]}</text>
-            </g>
-        `;
-    }).join('');
-    return `<svg viewBox="0 0 ${rows.length * 55 + 10} 120" width="100%" height="150" style="margin-top:10px;">${bars}</svg>`;
-}
 
 /* ===== Undo/Redo Keyboard Shortcuts ===== */
 document.addEventListener('keydown', (e) => {
