@@ -62,6 +62,13 @@ function load(){
       s.units.forEach(u => {
         u.area = u.area || '';
         u.notes = u.notes || '';
+        if (u.totalPrice && !u.plans) {
+          u.plans = [{ id: uid('PL'), name: 'السعر الافتراضي', price: u.totalPrice }];
+        }
+        if (u.hasOwnProperty('totalPrice')) {
+          delete u.totalPrice;
+        }
+        u.plans = u.plans || [];
       });
     }
 
@@ -72,6 +79,7 @@ function load(){
         c.maintenanceAmount = c.maintenanceAmount || 0;
         c.commissionSafeId = c.commissionSafeId || null;
         c.discountAmount = c.discountAmount || 0;
+        c.planName = c.planName || 'السعر الافتراضي';
       });
     }
 
@@ -224,6 +232,69 @@ function unitById(id){ return state.units.find(u=>u.id===id); }
 function custById(id){ return state.customers.find(c=>c.id===id); }
 function partnerById(id){ return state.partners.find(p=>p.id===id); }
 function unitCode(id){ return (unitById(id)||{}).code||'—'; }
+
+function processPayment(unitId, amount, method, date, safeId, installmentId = null) {
+  const safe = state.safes.find(s => s.id === safeId);
+  if (!safe) {
+      alert('خطأ: لم يتم العثور على الخزنة المحددة.');
+      return false;
+  }
+
+  // Always add the full amount to the safe balance first.
+  safe.balance = (safe.balance || 0) + amount;
+
+  // If the payment is for an installment, handle the distribution logic.
+  if (installmentId) {
+      let remainingToPay = amount;
+      const allUnitInstallments = state.installments
+          .filter(inst => inst.unitId === unitId && inst.status !== 'مدفوع')
+          .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+      const startIndex = allUnitInstallments.findIndex(inst => inst.id === installmentId);
+      if (startIndex === -1) {
+          alert('القسط المختار غير صالح للدفع (قد يكون مدفوعًا بالفعل).');
+          safe.balance -= amount; // Revert balance change
+          return false;
+      }
+
+      for (let j = startIndex; j < allUnitInstallments.length; j++) {
+          if (remainingToPay <= 0) break;
+
+          const currentInst = allUnitInstallments[j];
+          const amountToApply = Math.min(remainingToPay, currentInst.amount);
+
+          if (typeof currentInst.originalAmount !== 'number') {
+            currentInst.originalAmount = currentInst.amount;
+          }
+
+          currentInst.amount -= amountToApply;
+          remainingToPay -= amountToApply;
+
+          const paymentForInst = {
+              id: uid('P'), unitId, amount: amountToApply,
+              method: j === startIndex ? method : 'ترحيل',
+              date, installmentId: currentInst.id, safeId
+          };
+          state.payments.push(paymentForInst);
+
+          if (currentInst.amount <= 0) {
+              currentInst.status = 'مدفوع';
+              currentInst.paymentDate = date;
+          }
+      }
+
+      if (remainingToPay > 0) {
+          alert(`تم سداد جميع الأقساط المتاحة. المبلغ الفائض ${egp(remainingToPay)} لم يتم ترحيله لعدم وجود أقساط أخرى.`);
+          const surplusPayment = {id:uid('P'), unitId, amount: remainingToPay, method: 'فائض', date, safeId};
+          state.payments.push(surplusPayment);
+      }
+  } else {
+     // This is a general payment not linked to an installment
+     const p = {id:uid('P'), unitId, amount, method, date, safeId};
+     state.payments.push(p);
+  }
+  return true;
+}
 
 function generatePartnerLedger(partnerId) {
     const transactions = [];
@@ -462,16 +533,19 @@ function deleteUnit(unitId) {
 /* ===== الوحدات ===== */
 function calcRemaining(u){
   const ct = state.contracts.find(c => c.unitId === u.id);
-  if (!ct) return Number(u.totalPrice || 0);
+  if (!ct) {
+    return 0; // No contract, so nothing is remaining
+  }
 
   const totalPrice = Number(ct.totalPrice || 0);
   const discount = Number(ct.discountAmount || 0);
   const maintenance = Number(ct.maintenanceAmount || 0);
-  const downPayment = Number(ct.downPayment || 0);
 
   const totalOwed = (totalPrice - discount) + maintenance;
 
-  // We assume the downpayment is paid at contract signing, and all other payments are in the payments array.
+  // The down payment is made at contract signing and is not part of the payments array.
+  // All other payments are in the payments array.
+  const downPayment = Number(ct.downPayment || 0);
   const otherPayments = state.payments
       .filter(p => p.unitId === u.id)
       .reduce((sum, p) => sum + Number(p.amount || 0), 0);
@@ -494,8 +568,10 @@ function renderUnits(){
       });
     }
     list.sort((a,b)=>{
-      const colsA=[a.code||'', a.name||'', String(a.totalPrice||0), a.area||'', a.floor||'', a.building||'', a.status||''];
-      const colsB=[b.code||'', b.name||'', String(b.totalPrice||0), b.area||'', b.floor||'', b.building||'', b.status||''];
+      const priceA = (a.plans && a.plans[0]) ? a.plans[0].price : 0;
+      const priceB = (b.plans && b.plans[0]) ? b.plans[0].price : 0;
+      const colsA=[a.code||'', a.name||'', String(priceA), a.area||'', a.floor||'', a.building||'', a.status||''];
+      const colsB=[b.code||'', b.name||'', String(priceB), b.area||'', b.floor||'', b.building||'', b.status||''];
       return (colsA[sort.idx]+'').localeCompare(colsB[sort.idx]+'')*(sort.dir==='asc'?1:-1);
     });
     const rows=list.map(u=> {
@@ -503,10 +579,11 @@ function renderUnits(){
       if (u.status === 'مباعة') {
         actions += ` <button class="btn gold" style="margin-right: 5px;" onclick="startReturnProcess('${u.id}')">إرجاع وشراء</button>`;
       }
+      const defaultPrice = (u.plans && u.plans[0]) ? u.plans[0].price : 0;
       return [
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','code',this.textContent)">${u.code||''}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','name',this.textContent)">${u.name||''}</span>`,
-        `<span contenteditable="true" onblur="numEdit('units','${u.id}','totalPrice',this)">${egp(u.totalPrice||0)}</span>`,
+        `<span>${egp(defaultPrice)}</span>`, // Not editable from this main view
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','area',this.textContent)">${u.area||''}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','floor',this.textContent)">${u.floor||''}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','building',this.textContent)">${u.building||''}</span>`,
@@ -518,7 +595,7 @@ function renderUnits(){
       ];
     });
     document.getElementById('u-list').innerHTML=
-      table(['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','المتبقي','الحالة','ملاحظات','إجراءات',''], rows, sort, ns=>{sort=ns;draw();});
+      table(['الكود','اسم الوحدة','السعر المبدئي','المساحة','الدور','البرج','المتبقي','الحالة','ملاحظات','إجراءات',''], rows, sort, ns=>{sort=ns;draw();});
   }
 
   view.innerHTML=`
@@ -528,12 +605,18 @@ function renderUnits(){
       <div class="grid grid-4">
         <input class="input" id="u-code" placeholder="كود/اسم مختصر">
         <input class="input" id="u-name" placeholder="اسم الوحدة">
-        <input class="input" id="u-total" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <select class="select" id="u-status"><option value="متاحة">متاحة</option><option value="محجوزة">محجوزة</option><option value="مباعة">مباعة</option><option value="مرتجعة">مرتجعة</option></select>
         <input class="input" id="u-area" placeholder="المساحة (م²)">
         <input class="input" id="u-floor" placeholder="رقم الدور">
         <input class="input" id="u-building" placeholder="البرج/العمارة">
+        <select class="select" id="u-status"><option value="متاحة">متاحة</option><option value="محجوزة">محجوزة</option><option value="مباعة">مباعة</option><option value="مرتجعة">مرتجعة</option></select>
       </div>
+       <div class="card" style="margin-top:10px;">
+         <h4>خطة السعر الافتراضية</h4>
+         <div class="grid grid-2">
+            <input class="input" id="u-plan-name" placeholder="اسم الخطة (eg. كاش)" value="السعر الافتراضي">
+            <input class="input" id="u-plan-price" placeholder="السعر" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+         </div>
+       </div>
       <textarea class="input" id="u-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
       <button class="btn" style="margin-top:10px;" onclick="addUnit()">حفظ</button>
     </div>
@@ -552,12 +635,14 @@ function renderUnits(){
   window.addUnit=()=>{
     let code=document.getElementById('u-code').value.trim();
     const name=document.getElementById('u-name').value.trim();
-    const total=parseNumber(document.getElementById('u-total').value);
     const status=document.getElementById('u-status').value;
     const area=document.getElementById('u-area').value.trim();
     const floor=document.getElementById('u-floor').value.trim();
     const building=document.getElementById('u-building').value.trim();
     const notes=document.getElementById('u-notes').value.trim();
+
+    const planName = document.getElementById('u-plan-name').value.trim();
+    const planPrice = parseNumber(document.getElementById('u-plan-price').value);
 
     if (!code) {
         if (!building || !floor || !name) {
@@ -569,19 +654,27 @@ function renderUnits(){
         code = `${san_b}-${san_f}-${san_n}`;
     }
 
-    if(!total) return alert('أدخل السعر الكلي للوحدة');
+    if(!planPrice || !planName) return alert('الرجاء إدخال تفاصيل خطة السعر الافتراضية.');
 
     if (state.units.some(u => u.code.toLowerCase() === code.toLowerCase())) {
         return alert('هذا الكود مستخدم بالفعل. الرجاء إدخال كود فريد.');
     }
     saveState();
-    state.units.push({id:uid('U'),code,name,totalPrice:total,status,area,floor,building,notes});
-    persist(); draw();
+    const newUnit = {
+      id:uid('U'), code, name, status, area, floor, building, notes,
+      plans: [{ id: uid('PL'), name: planName, price: planPrice }]
+    };
+    state.units.push(newUnit);
+    persist();
+    draw();
   };
 
   window.expUnits=()=>{
-    const headers=['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','الحالة','المتبقي','ملاحظات'];
-    const rows=state.units.map(u=>[u.code,u.name||'',u.totalPrice,u.area||'',u.floor||'',u.building||'',u.status,calcRemaining(u),u.notes||'']);
+    const headers=['الكود','اسم الوحدة','السعر المبدئي','المساحة','الدور','البرج','الحالة','المتبقي','ملاحظات'];
+    const rows=state.units.map(u=> {
+      const defaultPrice = (u.plans && u.plans[0]) ? u.plans[0].price : 0;
+      return [u.code,u.name||'',defaultPrice,u.area||'',u.floor||'',u.building||'',u.status,calcRemaining(u),u.notes||''];
+    });
     exportCSV(headers, rows, 'units.csv');
   };
 
@@ -748,7 +841,7 @@ window.startReturnProcess = (unitId) => {
 
 window.numEdit=(coll,id,key,el)=>{ el.textContent = parseNumber(el.textContent||''); inlineUpd(coll,id,key,Number(el.textContent||0)); };
 
-/* ===== تفاصيل الوحدة وإدارة الشركاء ===== */
+/* ===== تفاصيل الوحدة وإدارة الشركاء وخطط الأسعار ===== */
 function renderUnitDetails(unitId){
   const u = unitById(unitId);
   if(!u) return nav('units');
@@ -770,26 +863,48 @@ function renderUnitDetails(unitId){
     sumEl.className = 'badge ' + (sum > 100 ? 'warn' : (sum === 100 ? 'ok' : 'info'));
   }
 
+  function drawPlans(){
+    const rows = u.plans.map(p => [
+        `<span contenteditable="true" onblur="editPlanProp('${p.id}', 'name', this.textContent)">${p.name}</span>`,
+        `<span contenteditable="true" onblur="editPlanProp('${p.id}', 'price', this.textContent, true)">${egp(p.price)}</span>`,
+        `<button class="btn secondary" onclick="removePlanFromUnit('${p.id}')">حذف</button>`
+    ]);
+    document.getElementById('ud-plans-list').innerHTML = table(['اسم الخطة', 'السعر', ''], rows);
+  }
+
   view.innerHTML = `
     <div class="card">
         <div class="header" style="justify-content: space-between;">
             <h1>إدارة الوحدة — ${u.code}</h1>
             <button class="btn secondary" onclick="nav('units')">⬅️ العودة للوحدات</button>
         </div>
-        <p><b>اسم الوحدة:</b> ${u.name||'—'} | <b>العمارة:</b> ${u.building||'—'} | <b>الدور:</b> ${u.floor||'—'}</p>
+        <p><b>اسم الوحدة:</b> ${u.name||'—'} | <b>البرج:</b> ${u.building||'—'} | <b>الدور:</b> ${u.floor||'—'}</p>
 
-        <div class="card" style="margin-top:16px;">
-            <h3>الشركاء في هذه الوحدة</h3>
-            <div id="ud-partners-list"></div>
-            <hr>
-            <h4>إضافة شريك جديد</h4>
-            <div class="tools" style="display:flex; flex-wrap:wrap; gap:8px;">
-                <select class="select" id="ud-pr-select" style="flex:1;"><option value="">اختر شريك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
-                <input class="input" id="ud-pr-percent" type="number" min="0.1" max="100" step="0.1" placeholder="النسبة %" style="flex:0.5;">
-                <button class="btn" onclick="addPartnerToUnit('${u.id}')">إضافة</button>
-                <span class="badge" id="ud-partners-sum">0 %</span>
+        <div class="grid grid-2" style="gap:16px; margin-top:16px; align-items:flex-start;">
+            <div class="card">
+                <h3>الشركاء في هذه الوحدة</h3>
+                <div id="ud-partners-list"></div>
+                <hr>
+                <h4>إضافة شريك جديد</h4>
+                <div class="tools">
+                    <select class="select" id="ud-pr-select" style="flex:1;"><option value="">اختر شريك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+                    <input class="input" id="ud-pr-percent" type="number" min="0.1" max="100" step="0.1" placeholder="النسبة %" style="flex:0.5;">
+                    <button class="btn" onclick="addPartnerToUnit('${u.id}')">إضافة</button>
+                    <span class="badge" id="ud-partners-sum">0 %</span>
+                </div>
             </div>
-            <small style="color:var(--muted)">أضف شركاء للوحدة من هنا. مجموع النسب يجب أن يكون 100%.</small>
+
+            <div class="card">
+                <h3>خطط الأسعار لهذه الوحدة</h3>
+                <div id="ud-plans-list"></div>
+                <hr>
+                <h4>إضافة خطة سعر جديدة</h4>
+                <div class="tools">
+                    <input class="input" id="ud-plan-name" placeholder="اسم الخطة (مثلاً: كاش)">
+                    <input class="input" id="ud-plan-price" type="number" placeholder="السعر">
+                    <button class="btn" onclick="addPlanToUnit('${u.id}')">إضافة</button>
+                </div>
+            </div>
         </div>
     </div>
   `;
@@ -798,15 +913,11 @@ function renderUnitDetails(unitId){
     const partnerId = document.getElementById('ud-pr-select').value;
     const percent = parseNumber(document.getElementById('ud-pr-percent').value);
     if(!partnerId || !(percent > 0)) return alert('الرجاء اختيار شريك وإدخال نسبة صحيحة.');
-
-    if(state.unitPartners.find(up => up.unitId === unitId && up.partnerId === partnerId)){
-        return alert('هذا الشريك تم إضافته بالفعل لهذه الوحدة.');
-    }
-
+    if(state.unitPartners.some(up => up.unitId === unitId && up.partnerId === partnerId)) return alert('هذا الشريك تم إضافته بالفعل لهذه الوحدة.');
     saveState();
     state.unitPartners.push({id: uid('UP'), unitId, partnerId, percent});
     persist();
-    drawPartners(); // Re-render only the partners list
+    drawPartners();
   };
 
   window.removePartnerFromUnit = (linkId) => {
@@ -817,7 +928,43 @@ function renderUnitDetails(unitId){
     drawPartners();
   };
 
+  window.addPlanToUnit = (unitId) => {
+    const name = document.getElementById('ud-plan-name').value.trim();
+    const price = parseNumber(document.getElementById('ud-plan-price').value);
+    if (!name || !price) return alert('الرجاء إدخال اسم وسعر الخطة.');
+    const unit = unitById(unitId);
+    if (!unit) return;
+    if (unit.plans.some(p => p.name.toLowerCase() === name.toLowerCase())) return alert('خطة بنفس الاسم موجودة بالفعل.');
+
+    saveState();
+    unit.plans.push({ id: uid('PL'), name, price });
+    persist();
+    drawPlans();
+    document.getElementById('ud-plan-name').value = '';
+    document.getElementById('ud-plan-price').value = '';
+  };
+
+  window.removePlanFromUnit = (planId) => {
+    if(!confirm('هل أنت متأكد من حذف خطة السعر هذه؟')) return;
+    saveState();
+    u.plans = u.plans.filter(p => p.id !== planId);
+    persist();
+    drawPlans();
+  };
+
+  window.editPlanProp = (planId, key, value, isNumber = false) => {
+    const plan = u.plans.find(p => p.id === planId);
+    if (plan) {
+      saveState();
+      plan[key] = isNumber ? parseNumber(value) : value;
+      persist();
+      // No redraw needed for inline edit, but we could redraw to re-format the number
+      drawPlans();
+    }
+  };
+
   drawPartners();
+  drawPlans();
 }
 
 function deleteContract(contractId) {
@@ -874,18 +1021,19 @@ function editContract(contractId) {
 
 function renderContracts(){
   function draw(){
-    const rows=state.contracts.map(c=>[ c.code, unitCode(c.unitId), (custById(c.customerId)||{}).name||'—', egp(c.totalPrice), egp(c.maintenanceAmount||0), c.start, `<button class="btn" onclick="openContractDetails('${c.id}')">عرض</button> <button class="btn gold" onclick="editContract('${c.id}')">تعديل</button>`, `<button class="btn secondary" onclick="deleteContract('${c.id}')">حذف</button>` ]);
-    document.getElementById('ct-list').innerHTML=table(['كود العقد','الوحدة','العميل','السعر','قيمة الصيانة','تاريخ البدء','إجراءات',''], rows);
+    const rows=state.contracts.map(c=>[ c.code, unitCode(c.unitId), (custById(c.customerId)||{}).name||'—', c.planName || '—', egp(c.totalPrice), egp(c.maintenanceAmount||0), c.start, `<button class="btn" onclick="openContractDetails('${c.id}')">عرض</button> <button class="btn gold" onclick="editContract('${c.id}')">تعديل</button>`, `<button class="btn secondary" onclick="deleteContract('${c.id}')">حذف</button>` ]);
+    document.getElementById('ct-list').innerHTML=table(['كود العقد','الوحدة','العميل','خطة السعر','السعر','قيمة الصيانة','تاريخ البدء','إجراءات',''], rows);
   }
   view.innerHTML=`
   <div class="grid">
     <div class="card">
       <h3>إضافة عقد</h3>
-      <p style="font-size:13px; color:var(--muted);">لإدارة الشركاء، اذهب إلى شاشة الوحدات ثم اضغط "إدارة" بجانب الوحدة المطلوبة.</p>
+      <p style="font-size:13px; color:var(--muted);">اختر الوحدة أولاً لعرض خطط الأسعار المتاحة.</p>
       <div class="grid grid-4">
-        <select class="select" id="ct-unit"><option value="">الوحدة</option>${state.units.filter(u=>u.status==='متاحة' || u.status ==='محجوزة').map(u=>`<option value="${u.id}">${u.code}</option>`).join('')}</select>
-        <select class="select" id="ct-cust"><option value="">العميل</option>${state.customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select>
-        <input class="input" id="ct-total" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <select class="select" id="ct-unit"><option value="">اختر الوحدة...</option>${state.units.filter(u=>u.status==='متاحة' || u.status ==='محجوزة').map(u=>`<option value="${u.id}">${u.code}</option>`).join('')}</select>
+        <select class="select" id="ct-plan"><option value="">اختر خطة السعر...</option></select>
+        <select class="select" id="ct-cust"><option value="">اختر العميل...</option>${state.customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select>
+        <input class="input" id="ct-total" placeholder="السعر الكلي" readonly style="background:var(--bg);">
         <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-discount" placeholder="مبلغ الخصم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-brokerp" placeholder="نسبة العمولة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
@@ -916,6 +1064,9 @@ function renderContracts(){
     const brokerP=parseNumber(document.getElementById('ct-brokerp').value);
     const brokerAmt=Math.round((total*brokerP/100)*100)/100;
     const commissionSafeId = document.getElementById('ct-safe').value;
+    const planSelect = document.getElementById('ct-plan');
+    const planName = planSelect.options[planSelect.selectedIndex]?.text;
+    const planId = planSelect.value;
 
     if (brokerAmt > 0 && !commissionSafeId) {
       return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
@@ -928,7 +1079,7 @@ function renderContracts(){
 
     saveState();
     const unitId=document.getElementById('ct-unit').value, customerId=document.getElementById('ct-cust').value;
-    if(!unitId||!customerId) return alert('اختر الوحدة والعميل');
+    if(!unitId||!customerId||!planId) return alert('الرجاء اختيار الوحدة، وخطة السعر، والعميل.');
 
     const unitPartners = state.unitPartners.filter(up => up.unitId === unitId);
     const totalPercent = unitPartners.reduce((sum, p) => sum + p.percent, 0);
@@ -951,7 +1102,7 @@ function renderContracts(){
     }
 
     const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
-    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
+    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, planId, planName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
     state.contracts.push(ct);
 
     // توليد الأقساط
@@ -977,8 +1128,8 @@ function renderContracts(){
   };
 
   window.printContracts=()=>{
-    const headers = ['الكود','الوحدة','العميل','السعر','المقدم','عمولة','صيانة','نوع','عدد','بداية'];
-    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${egp(c.maintenanceAmount||0)} (${c.maintenancePercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
+    const headers = ['الكود','الوحدة','العميل','خطة السعر','السعر','المقدم','عمولة','صيانة','نوع','عدد','بداية'];
+    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${c.planName||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${egp(c.maintenanceAmount||0)} (${c.maintenancePercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
     printHTML('تقرير العقود', `<h1>تقرير العقود</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
 
@@ -986,9 +1137,10 @@ function renderContracts(){
     const html=`<h1>عقد بيع — ${ct.code}</h1>
       <p>الوحدة: ${unitCode(ct.unitId)} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
       <table>
+        <tr><th>خطة السعر</th><td>${ct.planName||'—'}</td></tr>
         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
-        <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount||0)}</td></tr>
+        <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
         <tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount||0)} (${ct.brokerPercent||0}%)</td></tr>
         <tr><th>رسوم الصيانة</th><td>${egp(ct.maintenanceAmount||0)} (${ct.maintenancePercent||0}%)</td></tr>
         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + سنوية إضافية: ${ct.extraAnnual}</td></tr>
@@ -1012,8 +1164,6 @@ function renderContracts(){
   document.getElementById('ct-annual-bonus').oninput = updateTotalInstallments;
 
   draw();
-  // This function doesn't exist, removing it.
-  // drawPartnersBox();
   updateTotalInstallments();
 }
 
@@ -1154,58 +1304,30 @@ function renderInstallments(){
   window.payInstallment = function(id, btn){
     if (btn) btn.disabled = true;
     try {
-      saveState();
       const i = state.installments.find(x=>x.id===id);
-      if(!i) {
-          alert('لم يتم العثور على القسط');
+      if(!i || i.status==='مدفوع' || i.amount<=0) {
+          alert('هذا القسط غير صالح للدفع.');
           return;
       }
-      if(i.status==='مدفوع' || i.amount<=0) {
-          alert('هذا القسط مسدد بالكامل');
-          return;
+
+      const safeId = prompt(`اختر خزنة للدفع:\n${state.safes.map((s,idx)=>`${idx+1}: ${s.name}`).join('\n')}`, '1');
+      if (!safeId) return; // User cancelled
+      const selectedSafe = state.safes[parseInt(safeId, 10)-1];
+      if (!selectedSafe) {
+        alert('اختيار غير صالح.');
+        return;
       }
+
       const paid = Number(prompt('المبلغ المدفوع:', i.amount) || 0);
-      if(!(paid>0)) return; // User cancelled or entered 0
+      if(!(paid>0)) return;
 
-      let remainingToPay = paid;
-
-      // Get all subsequent installments for this unit to apply overpayment
-      const allUnitInstallments = state.installments
-          .filter(inst => inst.unitId === i.unitId && inst.status !== 'مدفوع')
-          .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
-
-      // Find the index of the current installment to start from there
-      const startIndex = allUnitInstallments.findIndex(inst => inst.id === id);
-
-      for (let j = startIndex; j < allUnitInstallments.length; j++) {
-          if (remainingToPay <= 0) break;
-
-          const currentInst = allUnitInstallments[j];
-          const amountToApply = Math.min(remainingToPay, currentInst.amount);
-
-          if (typeof currentInst.originalAmount !== 'number') {
-            currentInst.originalAmount = currentInst.amount;
-          }
-
-          currentInst.amount -= amountToApply;
-          remainingToPay -= amountToApply;
-
-          state.payments.push({id:uid('P'),unitId:currentInst.unitId,amount:amountToApply,method: j === startIndex ? 'قسط' : 'ترحيل',date:today(),installmentId:currentInst.id});
-
-          if (currentInst.amount <= 0) {
-              currentInst.status = 'مدفوع';
-              currentInst.paymentDate = today();
-          }
+      saveState();
+      if (processPayment(i.unitId, paid, 'قسط', today(), selectedSafe.id, i.id)) {
+        persist();
+        __inst_draw();
       }
-
-      if (remainingToPay > 0) {
-        alert(`تم سداد جميع الأقساط المتاحة. المبلغ الفائض ${egp(remainingToPay)} لم يتم ترحيله لعدم وجود أقساط أخرى.`);
-      }
-
-      persist();
-      __inst_draw();
     } finally {
-        if (btn) setTimeout(() => { btn.disabled = false; }, 200); // Short delay to prevent immediate re-click
+        if (btn) setTimeout(() => { btn.disabled = false; }, 200);
     }
   };
   window.reschedule = function(id){
@@ -1351,7 +1473,6 @@ function renderPayments(){
   document.getElementById('p-method').onchange = updateInstallmentSelector;
 
   window.addPayment=()=>{
-    saveState();
     const unitId=document.getElementById('p-unit').value;
     const amount=parseNumber(document.getElementById('p-amount').value);
     const method=document.getElementById('p-method').value;
@@ -1362,69 +1483,19 @@ function renderPayments(){
     if(!unitId||!(amount>0)) return alert('اختر وحدة واكتب مبلغ صحيح');
     if(!safeId) return alert('الرجاء اختيار الخزنة.');
 
-    const safe = safeById(safeId);
-    if (!safe) return alert('لم يتم العثور على الخزنة المختارة.');
+    saveState();
 
-    // Add total amount to safe balance
-    safe.balance = (safe.balance || 0) + amount;
+    const isInstallmentPayment = (method === 'قسط' || method === 'جزئي') && installmentId;
 
-    if ((method === 'قسط' || method === 'جزئي') && installmentId) {
-        const i = state.installments.find(x => x.id === installmentId);
-        if (!i) {
-            safe.balance -= amount; // Revert if installment not found
-            return alert('لم يتم العثور على القسط المختار.');
-        }
-
-        let remainingToPay = amount;
-        const allUnitInstallments = state.installments
-            .filter(inst => inst.unitId === unitId && inst.status !== 'مدفوع')
-            .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
-
-        const startIndex = allUnitInstallments.findIndex(inst => inst.id === installmentId);
-        if (startIndex === -1) {
-            safe.balance -= amount; // Revert if installment not found in the payable list
-            return alert('القسط المختار غير صالح للدفع (قد يكون مدفوعًا بالفعل).');
-        }
-
-        for (let j = startIndex; j < allUnitInstallments.length; j++) {
-            if (remainingToPay <= 0) break;
-
-            const currentInst = allUnitInstallments[j];
-            const amountToApply = Math.min(remainingToPay, currentInst.amount);
-
-            if (typeof currentInst.originalAmount !== 'number') {
-              currentInst.originalAmount = currentInst.amount;
-            }
-
-            currentInst.amount -= amountToApply;
-            remainingToPay -= amountToApply;
-
-            const paymentForInst = {
-                id: uid('P'), unitId, amount: amountToApply,
-                method: j === startIndex ? method : 'ترحيل',
-                date, installmentId: currentInst.id, safeId
-            };
-            state.payments.push(paymentForInst);
-
-            if (currentInst.amount <= 0) {
-                currentInst.status = 'مدفوع';
-                currentInst.paymentDate = date;
-            }
-        }
-
-        if (remainingToPay > 0) {
-            alert(`تم سداد جميع الأقساط المتاحة. المبلغ الفائض ${egp(remainingToPay)} لم يتم ترحيله لعدم وجود أقساط أخرى.`);
-            const surplusPayment = {id:uid('P'), unitId, amount: remainingToPay, method: 'فائض', date, safeId};
-            state.payments.push(surplusPayment);
-        }
-
+    if (processPayment(unitId, amount, method, date, safeId, isInstallmentPayment ? installmentId : null)) {
+      persist();
+      draw();
+      const safeName = (state.safes.find(s=>s.id===safeId)||{}).name||'—';
+      printHTML('إيصال دفع', `<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(unitId)}</p><p>المبلغ: ${egp(amount)}</p><p>الطريقة: ${method}</p><p>الخزنة: ${safeName}</p><p>التاريخ: ${date}</p>`);
     } else {
-       const p = {id:uid('P'), unitId, amount, method, date, safeId};
-       state.payments.push(p);
+      // If processPayment fails, it reverts its own state changes, but we still need to undo the saveState
+      undo();
     }
-    persist();
-    draw();
-    printHTML('إيصال دفع', `<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(unitId)}</p><p>المبلغ: ${egp(amount)}</p><p>الطريقة: ${method}</p><p>الخزنة: ${safeName(p.safeId)}</p><p>التاريخ: ${date}</p>`);
   };
   window.expPayments=()=>{
     exportCSV(['الوحدة','المبلغ','الطريقة','الخزنة','التاريخ','مصدر'], state.payments.map(p=>[unitCode(p.unitId),p.amount,p.method||'',safeName(p.safeId), p.date||'', p.installmentId?'قسط':'' ]), 'payments.csv');
