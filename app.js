@@ -70,11 +70,22 @@ function load(){
       s.contracts.forEach(c => {
         c.maintenancePercent = c.maintenancePercent || 0;
         c.maintenanceAmount = c.maintenanceAmount || 0;
+        c.commissionSafeId = c.commissionSafeId || null;
+      });
+    }
+
+    // Data migration for safes
+    s.safes = s.safes || [];
+    if (s.safes.length === 0) {
+        s.safes.push({ id: uid('S'), name: 'الخزنة الرئيسية', balance: 0 });
+    } else {
+      s.safes.forEach(safe => {
+        safe.balance = safe.balance || 0;
       });
     }
 
     return {
-      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[],
+      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [],
       settings:{theme:'dark',font:16},locked:false,
       ...s
     };
@@ -122,6 +133,8 @@ const routes=[
   {id:'treasury',title:'الخزينة',render:renderTreasury, tab: true},
   {id:'reports',title:'التقارير',render:renderReports, tab: true},
   {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: true},
+  {id:'safes', title:'إدارة الخزن', render:renderSafes, tab: true},
+  {id:'transfers', title: 'التحويلات', render: renderTransfers, tab: true},
   {id:'backup',title:'نسخة احتياطية',render:renderBackup, tab: true},
   {id:'unit-details', title:'تفاصيل الوحدة', render:renderUnitDetails, tab: false},
 ];
@@ -594,6 +607,53 @@ function renderUnits(){
   draw();
 }
 
+/* ===== إدارة الخزن ===== */
+function renderSafes(){
+  function draw(){
+    const rows = state.safes.map(s => [
+      `<span contenteditable="true" onblur="inlineUpd('safes','${s.id}','name',this.textContent)">${s.name || ''}</span>`,
+      `<span>${egp(s.balance || 0)}</span>`,
+      `<button class="btn secondary" onclick="delRow('safes','${s.id}')">حذف</button>`
+    ]);
+    document.getElementById('s-list').innerHTML = table(['اسم الخزنة', 'الرصيد الحالي', ''], rows);
+  }
+
+  view.innerHTML = `
+  <div class="grid grid-2">
+      <div class="card">
+          <h3>إضافة خزنة جديدة</h3>
+          <input class="input" id="s-name" placeholder="اسم الخزنة (مثلاً: الخزنة الرئيسية، حساب البنك)">
+          <input class="input" id="s-balance" placeholder="الرصيد الافتتاحي" type="number" value="0" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+          <button class="btn" style="margin-top:10px;" onclick="addSafe()">إضافة</button>
+      </div>
+      <div class="card">
+          <h3>قائمة الخزن</h3>
+          <div id="s-list"></div>
+      </div>
+  </div>
+  `;
+
+  window.addSafe = () => {
+      const name = document.getElementById('s-name').value.trim();
+      const balance = parseNumber(document.getElementById('s-balance').value);
+      if (!name) return alert('الرجاء إدخال اسم الخزنة.');
+
+      if (state.safes.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+          return alert('خزنة بنفس الاسم موجودة بالفعل.');
+      }
+
+      saveState();
+      state.safes.push({ id: uid('S'), name, balance });
+      persist();
+
+      document.getElementById('s-name').value = '';
+      document.getElementById('s-balance').value = '0';
+      draw();
+  };
+
+  draw();
+}
+
 window.executeReturn = (unitId, buyingPartnerId) => {
     saveState();
     const u = unitById(unitId);
@@ -828,6 +888,7 @@ function renderContracts(){
         <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-brokerp" placeholder="نسبة العمولة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-maintp" placeholder="نسبة الصيانة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <select class="select" id="ct-safe"><option value="">اختر خزنة العمولة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
         <select class="select" id="ct-type"><option>شهري</option><option>ربع سنوي</option><option>نصف سنوي</option><option>سنوي</option></select>
         <input class="input" id="ct-count" placeholder="عدد الدفعات" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
         <input class="input" id="ct-annual-bonus" placeholder="دفعات سنوية إضافية (0-3)" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
@@ -848,6 +909,20 @@ function renderContracts(){
   </div>`;
 
   window.createContract=()=>{
+    const total=parseNumber(document.getElementById('ct-total').value), down=parseNumber(document.getElementById('ct-down').value);
+    const brokerP=parseNumber(document.getElementById('ct-brokerp').value);
+    const brokerAmt=Math.round((total*brokerP/100)*100)/100;
+    const commissionSafeId = document.getElementById('ct-safe').value;
+
+    if (brokerAmt > 0 && !commissionSafeId) {
+      return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
+    }
+
+    const safe = state.safes.find(s => s.id === commissionSafeId);
+    if (brokerAmt > 0 && safe && safe.balance < brokerAmt) {
+      return alert(`رصيد خزنة العمولة "${safe.name}" غير كافٍ. الرصيد الحالي: ${egp(safe.balance)}`);
+    }
+
     saveState();
     const unitId=document.getElementById('ct-unit').value, customerId=document.getElementById('ct-cust').value;
     if(!unitId||!customerId) return alert('اختر الوحدة والعميل');
@@ -860,19 +935,20 @@ function renderContracts(){
         }
     }
 
-    const total=parseNumber(document.getElementById('ct-total').value), down=parseNumber(document.getElementById('ct-down').value);
-    const brokerP=parseNumber(document.getElementById('ct-brokerp').value);
     const maintP=parseNumber(document.getElementById('ct-maintp').value);
     const type=document.getElementById('ct-type').value, count=parseInt(document.getElementById('ct-count').value||'0',10);
     const extra=parseInt(document.getElementById('ct-annual-bonus').value||'0',10);
     const startStr=document.getElementById('ct-start').value||today(); const start=new Date(startStr);
     if(count<=0) return alert('عدد الدفعات غير صالح');
 
-    const brokerAmt=Math.round((total*brokerP/100)*100)/100;
     const maintAmt=Math.round((total*maintP/100)*100)/100;
 
+    if (safe && brokerAmt > 0) {
+      safe.balance -= brokerAmt;
+    }
+
     const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
-    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, brokerPercent:brokerP, brokerAmount:brokerAmt, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
+    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
     state.contracts.push(ct);
 
     // توليد الأقساط
@@ -1193,12 +1269,15 @@ function renderInstallments(){
 
 /* ===== المدفوعات ===== */
 function renderPayments(){
+  const safeById = (id) => state.safes.find(s => s.id === id);
+  const safeName = (id) => (safeById(id) || {}).name || '—';
+
   function draw(){
     const q=(document.getElementById('p-q')?.value || '').trim().toLowerCase();
     let list=state.payments.slice().reverse();
     if(q) {
       list=list.filter(p=> {
-        const searchable = `${unitCode(p.unitId)} ${p.method||''} ${p.date||''}`.toLowerCase();
+        const searchable = `${unitCode(p.unitId)} ${p.method||''} ${p.date||''} ${safeName(p.safeId)}`.toLowerCase();
         return searchable.includes(q);
       });
     }
@@ -1206,31 +1285,33 @@ function renderPayments(){
       unitCode(p.unitId),
       egp(p.amount),
       p.method||'—',
+      safeName(p.safeId),
       p.date||'—',
       (p.installmentId?'<span class="badge info">من قسط</span>':'<span class="badge secondary">يدوي</span>'),
-      `<button class="btn" onclick='printHTML("إيصال دفع", "<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(p.unitId)}</p><p>المبلغ: ${egp(p.amount)}</p><p>الطريقة: ${p.method||"—"}</p><p>التاريخ: ${p.date||"—"}</p>")'>إيصال</button>` +
+      `<button class="btn" onclick='printHTML("إيصال دفع", "<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(p.unitId)}</p><p>المبلغ: ${egp(p.amount)}</p><p>الطريقة: ${p.method||"—"}</p><p>الخزنة: ${safeName(p.safeId)}</p><p>التاريخ: ${p.date||"—"}</p>")'>إيصال</button>` +
       (p.installmentId ? '' : ` <button class="btn secondary" onclick="deletePayment('${p.id}')">حذف</button>`)
     ]);
-    document.getElementById('p-list').innerHTML=table(['الوحدة','المبلغ','الطريقة','التاريخ','مصدر',''], rows);
+    document.getElementById('p-list').innerHTML=table(['الوحدة','المبلغ','الطريقة','الخزنة','التاريخ','مصدر',''], rows);
   }
 
   view.innerHTML=`
   <div class="grid grid-2">
     <div class="card">
       <h3>إضافة دفعة</h3>
-      <select class="select" id="p-unit"><option value="">الوحدة</option>${state.units.map(u=>`<option value="${u.id}">${u.code} - ${u.name||''}</option>`).join('')}</select>
-      <input class="input" id="p-amount" placeholder="المبلغ" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-      <select class="select" id="p-method"><option value="نقدي">نقدي</option><option value="تحويل">تحويل</option><option value="قسط">قسط</option><option value="جزئي">جزئي</option></select>
+      <select class="select" id="p-safe" required><option value="">اختر الخزنة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
+      <select class="select" id="p-unit" style="margin-top:8px"><option value="">الوحدة</option>${state.units.map(u=>`<option value="${u.id}">${u.code} - ${u.name||''}</option>`).join('')}</select>
+      <input class="input" id="p-amount" placeholder="المبلغ" oninput="this.value=this.value.replace(/[^\\d.]/g,'')" style="margin-top:8px">
+      <select class="select" id="p-method" style="margin-top:8px"><option value="نقدي">نقدي</option><option value="تحويل">تحويل</option><option value="قسط">قسط</option><option value="جزئي">جزئي</option></select>
       <div id="p-installments-container" style="display:none; margin-top: 8px;">
         <select class="select" id="p-installments"><option value="">اختر القسط المرتبط</option></select>
       </div>
-      <input class="input" id="p-date" type="date" value="${today()}">
-      <button class="btn" onclick="addPayment()">حفظ + إيصال</button>
+      <input class="input" id="p-date" type="date" value="${today()}" style="margin-top:8px">
+      <button class="btn" onclick="addPayment()" style="margin-top:8px">حفظ + إيصال</button>
     </div>
     <div class="card">
       <h3>المدفوعات</h3>
       <div class="tools">
-        <input class="input" id="p-q" placeholder="بحث" oninput="draw()">
+        <input class="input" id="p-q" placeholder="بحث..." oninput="draw()">
         <button class="btn secondary" onclick="expPayments()">CSV</button>
         <button class="btn" onclick="printPayments()">طباعة PDF</button>
       </div>
@@ -1272,14 +1353,23 @@ function renderPayments(){
     const method=document.getElementById('p-method').value;
     const date=document.getElementById('p-date').value||today();
     const installmentId = document.getElementById('p-installments').value;
+    const safeId = document.getElementById('p-safe').value;
 
     if(!unitId||!(amount>0)) return alert('اختر وحدة واكتب مبلغ صحيح');
+    if(!safeId) return alert('الرجاء اختيار الخزنة.');
 
-    const p = {id:uid('P'), unitId, amount, method, date};
+    const safe = safeById(safeId);
+    if (!safe) return alert('لم يتم العثور على الخزنة المختارة.');
+
+    // Add total amount to safe balance
+    safe.balance = (safe.balance || 0) + amount;
 
     if ((method === 'قسط' || method === 'جزئي') && installmentId) {
         const i = state.installments.find(x => x.id === installmentId);
-        if (!i) return alert('لم يتم العثور على القسط المختار.');
+        if (!i) {
+            safe.balance -= amount; // Revert if installment not found
+            return alert('لم يتم العثور على القسط المختار.');
+        }
 
         let remainingToPay = amount;
         const allUnitInstallments = state.installments
@@ -1287,6 +1377,10 @@ function renderPayments(){
             .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
 
         const startIndex = allUnitInstallments.findIndex(inst => inst.id === installmentId);
+        if (startIndex === -1) {
+            safe.balance -= amount; // Revert if installment not found in the payable list
+            return alert('القسط المختار غير صالح للدفع (قد يكون مدفوعًا بالفعل).');
+        }
 
         for (let j = startIndex; j < allUnitInstallments.length; j++) {
             if (remainingToPay <= 0) break;
@@ -1304,7 +1398,7 @@ function renderPayments(){
             const paymentForInst = {
                 id: uid('P'), unitId, amount: amountToApply,
                 method: j === startIndex ? method : 'ترحيل',
-                date, installmentId: currentInst.id
+                date, installmentId: currentInst.id, safeId
             };
             state.payments.push(paymentForInst);
 
@@ -1316,26 +1410,25 @@ function renderPayments(){
 
         if (remainingToPay > 0) {
             alert(`تم سداد جميع الأقساط المتاحة. المبلغ الفائض ${egp(remainingToPay)} لم يتم ترحيله لعدم وجود أقساط أخرى.`);
-            // Also create a general payment for the surplus
-            const surplusPayment = {id:uid('P'), unitId, amount: remainingToPay, method: 'فائض', date};
+            const surplusPayment = {id:uid('P'), unitId, amount: remainingToPay, method: 'فائض', date, safeId};
             state.payments.push(surplusPayment);
         }
 
     } else {
-       // It's a general payment not linked to an installment
+       const p = {id:uid('P'), unitId, amount, method, date, safeId};
        state.payments.push(p);
     }
     persist();
     draw();
-    printHTML('إيصال دفع', `<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(unitId)}</p><p>المبلغ: ${egp(amount)}</p><p>الطريقة: ${p.method}</p><p>التاريخ: ${p.date}</p>`);
+    printHTML('إيصال دفع', `<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(unitId)}</p><p>المبلغ: ${egp(amount)}</p><p>الطريقة: ${method}</p><p>الخزنة: ${safeName(p.safeId)}</p><p>التاريخ: ${date}</p>`);
   };
   window.expPayments=()=>{
-    exportCSV(['الوحدة','المبلغ','الطريقة','التاريخ','مصدر'], state.payments.map(p=>[unitCode(p.unitId),p.amount,p.method||'',p.date||'', p.installmentId?'قسط':'' ]), 'payments.csv');
+    exportCSV(['الوحدة','المبلغ','الطريقة','الخزنة','التاريخ','مصدر'], state.payments.map(p=>[unitCode(p.unitId),p.amount,p.method||'',safeName(p.safeId), p.date||'', p.installmentId?'قسط':'' ]), 'payments.csv');
   };
   window.printPayments=()=>{
     const rows=state.payments.map(p=>`<tr><td>${unitCode(p.unitId)}</td>
-    <td>${egp(p.amount)}</td><td>${p.method||'—'}</td><td>${p.date||'—'}</td></tr>`).join('');
-    printHTML('تقرير المدفوعات', `<h1>تقرير المدفوعات</h1><table><thead><tr><th>الوحدة</th><th>المبلغ</th><th>الطريقة</th><th>التاريخ</th></tr></thead><tbody>${rows}</tbody></table>`);
+    <td>${egp(p.amount)}</td><td>${p.method||'—'}</td><td>${safeName(p.safeId)}</td><td>${p.date||'—'}</td></tr>`).join('');
+    printHTML('تقرير المدفوعات', `<h1>تقرير المدفوعات</h1><table><thead><tr><th>الوحدة</th><th>المبلغ</th><th>الطريقة</th><th>الخزنة</th><th>التاريخ</th></tr></thead><tbody>${rows}</tbody></table>`);
   };
   window.deletePayment = function(id) {
       const payment = state.payments.find(p => p.id === id);
@@ -1345,6 +1438,13 @@ function renderPayments(){
       }
       if (confirm(`هل أنت متأكد من حذف هذه الدفعة؟\nالمبلغ: ${egp(payment.amount)}\nالتاريخ: ${payment.date}`)) {
           saveState();
+          // On deletion, we must also subtract the amount from the safe if possible
+          if (payment.safeId) {
+            const safe = safeById(payment.safeId);
+            if (safe) {
+              safe.balance = (safe.balance || 0) - payment.amount;
+            }
+          }
           state.payments = state.payments.filter(p => p.id !== id);
           persist();
           nav('payments');
@@ -1466,6 +1566,7 @@ function renderReports(){
         <div class="card">
             <h4 style="margin-top:0; margin-bottom:8px; border-bottom:1px solid var(--line); padding-bottom:4px;">تقارير الشركاء</h4>
             <div class="tools" style="flex-direction: column; gap: 8px; align-items: stretch;">
+                <button class="btn gold report-btn" data-type="partner_summary">ملخص أرباح الشركاء</button>
                 <button class="btn gold report-btn" data-type="partner_profits">تفاصيل أرباح الشركاء</button>
                 <button class="btn gold report-btn" data-type="partner_cashflow">ملخص تدفقات الشركاء</button>
             </div>
@@ -1668,6 +1769,55 @@ window.runReport=(type)=>{
       const months={}; pays.forEach(p=>{ const ym=p.date.slice(0,7); months[ym]=(months[ym]||0)+Number(p.amount||0); });
       rows=Object.keys(months).sort().map(k=>[k,egp(months[k])]);
       break;
+    case 'partner_summary':
+      title = 'ملخص أرباح الشركاء';
+      headers = ['الشريك', 'إجمالي الدخل', 'إجمالي المصروفات', 'صافي الربح'];
+      let summary = {};
+      state.partners.forEach(p => {
+        summary[p.id] = { name: p.name, income: 0, expense: 0 };
+      });
+
+      const transactions = [];
+      state.payments.forEach(p => {
+        if ((!from || p.date >= from) && (!to || p.date <= to)) {
+            transactions.push({ type: 'payment', data: p });
+        }
+      });
+       state.contracts.forEach(c => {
+        if ((!from || c.start >= from) && (!to || c.start <= to)) {
+            transactions.push({ type: 'contract', data: c });
+        }
+      });
+
+      transactions.forEach(tx => {
+        const item = tx.data;
+        const unitId = item.unitId || (tx.type === 'contract' ? item.unitId : null);
+        if (!unitId) return;
+
+        const unitPartners = state.unitPartners.filter(up => up.unitId === unitId);
+        unitPartners.forEach(link => {
+          if (summary[link.partnerId]) {
+            if (tx.type === 'payment') {
+              summary[link.partnerId].income += item.amount * (link.percent / 100);
+            } else if (tx.type === 'contract') {
+              if (item.downPayment > 0) {
+                summary[link.partnerId].income += item.downPayment * (link.percent / 100);
+              }
+              if (item.brokerAmount > 0) {
+                summary[link.partnerId].expense += item.brokerAmount * (link.percent / 100);
+              }
+            }
+          }
+        });
+      });
+
+      rows = Object.values(summary).map(s => [
+        s.name,
+        egp(s.income),
+        egp(s.expense),
+        egp(s.income - s.expense)
+      ]);
+      break;
     case 'partner_profits':
       title='تقرير أرباح الشركاء'; headers=['الشريك','الوحدة','إجمالي الدفعة','نسبة الشريك','ربح الشريك'];
       let partnerPays=state.payments.slice();
@@ -1745,6 +1895,95 @@ function printLastReport() {
     } else {
         alert('لا توجد بيانات تقرير للطباعة. يرجى إنشاء تقرير أولاً.');
     }
+}
+
+/* ===== التحويلات بين الخزن ===== */
+function renderTransfers(){
+  const safeById = (id) => state.safes.find(s => s.id === id);
+  const safeName = (id) => (safeById(id) || {}).name || '—';
+
+  function draw(){
+    const rows = state.transfers.map(t => [
+      safeName(t.fromSafeId),
+      safeName(t.toSafeId),
+      egp(t.amount),
+      t.date,
+      t.notes || '—'
+    ]).reverse();
+    document.getElementById('t-list').innerHTML = table(['من خزنة', 'إلى خزنة', 'المبلغ', 'التاريخ', 'ملاحظات'], rows);
+  }
+
+  const safeOptions = state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+
+  view.innerHTML = `
+  <div class="grid grid-2">
+    <div class="card">
+      <h3>تسجيل تحويل</h3>
+      <div class="grid grid-2" style="gap:10px;">
+        <select class="select" id="t-from"><option value="">من خزنة...</option>${safeOptions}</select>
+        <select class="select" id="t-to"><option value="">إلى خزنة...</option>${safeOptions}</select>
+      </div>
+      <input class="input" id="t-amount" type="number" placeholder="المبلغ" style="margin-top:10px;">
+      <input class="input" id="t-date" type="date" value="${today()}" style="margin-top:10px;">
+      <textarea class="input" id="t-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
+      <button class="btn" style="margin-top:10px;" onclick="addTransfer()">تنفيذ التحويل</button>
+    </div>
+    <div class="card">
+      <h3>سجل التحويلات</h3>
+      <div id="t-list"></div>
+    </div>
+  </div>
+  `;
+
+  window.addTransfer = () => {
+    const fromSafeId = document.getElementById('t-from').value;
+    const toSafeId = document.getElementById('t-to').value;
+    const amount = parseNumber(document.getElementById('t-amount').value);
+    const date = document.getElementById('t-date').value;
+    const notes = document.getElementById('t-notes').value.trim();
+
+    if (!fromSafeId || !toSafeId || !amount) {
+      return alert('الرجاء ملء جميع الحقول: من خزنة، إلى خزنة، والمبلغ.');
+    }
+    if (fromSafeId === toSafeId) {
+      return alert('لا يمكن التحويل إلى نفس الخزنة.');
+    }
+    if (amount <= 0) {
+      return alert('الرجاء إدخال مبلغ صحيح للتحويل.');
+    }
+
+    const fromSafe = safeById(fromSafeId);
+    const toSafe = safeById(toSafeId);
+
+    if (!fromSafe || !toSafe) {
+      return alert('لم يتم العثور على الخزن المحددة.');
+    }
+    if (fromSafe.balance < amount) {
+      return alert(`رصيد الخزنة "${fromSafe.name}" غير كافٍ. الرصيد الحالي: ${egp(fromSafe.balance)}`);
+    }
+
+    saveState();
+
+    // Perform the transfer
+    fromSafe.balance -= amount;
+    toSafe.balance += amount;
+
+    // Record the transaction
+    state.transfers.push({
+      id: uid('T'),
+      fromSafeId,
+      toSafeId,
+      amount,
+      date,
+      notes
+    });
+
+    persist();
+    alert('تم تنفيذ التحويل بنجاح!');
+    nav('transfers'); // Refresh the view
+  };
+
+  draw();
 }
 
 /* ===== نسخة احتياطية ===== */
