@@ -71,6 +71,7 @@ function load(){
         c.maintenancePercent = c.maintenancePercent || 0;
         c.maintenanceAmount = c.maintenanceAmount || 0;
         c.commissionSafeId = c.commissionSafeId || null;
+        c.discountAmount = c.discountAmount || 0;
       });
     }
 
@@ -461,24 +462,24 @@ function deleteUnit(unitId) {
 /* ===== الوحدات ===== */
 function calcRemaining(u){
   const ct = state.contracts.find(c => c.unitId === u.id);
-  // If no contract, remaining is the full price
   if (!ct) return Number(u.totalPrice || 0);
 
-  // Total price from the contract is the source of truth
-  const totalPrice = Number(ct.totalPrice || u.totalPrice || 0);
-
-  // Sum of all payments explicitly linked to an installment
-  const installmentPayments = state.payments
-      .filter(p => p.unitId === u.id && p.installmentId)
-      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-
-  // The down payment amount from the contract
+  const totalPrice = Number(ct.totalPrice || 0);
+  const discount = Number(ct.discountAmount || 0);
+  const maintenance = Number(ct.maintenanceAmount || 0);
   const downPayment = Number(ct.downPayment || 0);
 
-  // Total paid towards the principal is the down payment plus all installment payments.
-  const totalPaid = downPayment + installmentPayments;
+  const totalOwed = (totalPrice - discount) + maintenance;
 
-  const remaining = totalPrice - totalPaid;
+  // We assume the downpayment is paid at contract signing, and all other payments are in the payments array.
+  const otherPayments = state.payments
+      .filter(p => p.unitId === u.id)
+      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+  const totalPaid = downPayment + otherPayments;
+
+  const remaining = totalOwed - totalPaid;
+
   return Math.max(0, remaining);
 }
 function renderUnits(){
@@ -886,6 +887,7 @@ function renderContracts(){
         <select class="select" id="ct-cust"><option value="">العميل</option>${state.customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select>
         <input class="input" id="ct-total" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="ct-discount" placeholder="مبلغ الخصم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-brokerp" placeholder="نسبة العمولة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-maintp" placeholder="نسبة الصيانة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <select class="select" id="ct-safe"><option value="">اختر خزنة العمولة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
@@ -910,6 +912,7 @@ function renderContracts(){
 
   window.createContract=()=>{
     const total=parseNumber(document.getElementById('ct-total').value), down=parseNumber(document.getElementById('ct-down').value);
+    const discount = parseNumber(document.getElementById('ct-discount').value);
     const brokerP=parseNumber(document.getElementById('ct-brokerp').value);
     const brokerAmt=Math.round((total*brokerP/100)*100)/100;
     const commissionSafeId = document.getElementById('ct-safe').value;
@@ -948,12 +951,12 @@ function renderContracts(){
     }
 
     const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
-    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
+    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
     state.contracts.push(ct);
 
     // توليد الأقساط
     const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
-    const remain=Math.max(0, (total - down) + maintAmt); // Installments cover remaining price + maintenance
+    const remain=Math.max(0, (total - discount - down) + maintAmt); // Installments cover remaining price + maintenance
     const parts=count + ct.extraAnnual;
     const base=Math.floor((remain/parts)*100)/100; let acc=0;
     for(let i=0;i<count;i++){
@@ -985,6 +988,7 @@ function renderContracts(){
       <table>
         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
+        <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount||0)}</td></tr>
         <tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount||0)} (${ct.brokerPercent||0}%)</td></tr>
         <tr><th>رسوم الصيانة</th><td>${egp(ct.maintenanceAmount||0)} (${ct.maintenancePercent||0}%)</td></tr>
         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + سنوية إضافية: ${ct.extraAnnual}</td></tr>
@@ -2160,7 +2164,10 @@ window.openContractDetails = function(id) {
                     <table>
                         <tr><th>العميل</th><td>${customer?.name || '—'} (${customer?.phone || '—'})</td></tr>
                         <tr><th>الوحدة</th><td>${unit?.code || '—'} (${unit?.name || '—'})</td></tr>
-                        <tr><th>السعر الكلي</th><td style="font-weight:bold">${egp(ct.totalPrice)}</td></tr>
+                        <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
+                        <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount || 0)}</td></tr>
+                        <tr><th>رسوم الصيانة</th><td>${egp(ct.maintenanceAmount || 0)}</td></tr>
+                        <tr><th>المبلغ بعد التعديل</th><td style="font-weight:bold">${egp((ct.totalPrice - (ct.discountAmount||0)) + (ct.maintenanceAmount||0))}</td></tr>
                         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
                         <tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount || 0)} (${ct.brokerPercent || 0}%)</td></tr>
                         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + ${ct.extraAnnual} سنوية</td></tr>
