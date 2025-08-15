@@ -1082,11 +1082,13 @@ function renderContracts(){
     if(!unitId||!customerId||!planId) return alert('الرجاء اختيار الوحدة، وخطة السعر، والعميل.');
 
     const unitPartners = state.unitPartners.filter(up => up.unitId === unitId);
-    const totalPercent = unitPartners.reduce((sum, p) => sum + p.percent, 0);
-    if (unitPartners.length > 0 && totalPercent !== 100) {
-        if (!confirm(`تحذير: مجموع نسب الشركاء لهذه الوحدة هو ${totalPercent}%. هل تريد المتابعة على أي حال؟`)) {
-            return;
-        }
+    const totalPercent = unitPartners.reduce((sum, p) => sum + Number(p.percent), 0);
+
+    if (unitPartners.length === 0) {
+      return alert('لا يمكن إنشاء عقد. يجب تحديد شركاء لهذه الوحدة أولاً من خلال شاشة "إدارة الوحدة".');
+    }
+    if (totalPercent !== 100) {
+      return alert(`لا يمكن إنشاء عقد. مجموع نسب الشركاء هو ${totalPercent}% ويجب أن يكون 100% بالضبط.`);
     }
 
     const maintP=parseNumber(document.getElementById('ct-maintp').value);
