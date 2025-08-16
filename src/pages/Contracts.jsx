@@ -4,7 +4,8 @@ import { useAppContext } from '../context/StateContext';
 import { uid } from '../utils/helpers';
 import { egp } from '../utils/formatters';
 import { parseNumber } from '../utils/parsers';
-import { custById, unitCode, today } from '../utils/data';
+import { custById, unitCode } from '../utils/data';
+import { today } from '../utils/helpers';
 
 const Contracts = () => {
     const { appState, setAppState } = useAppContext();

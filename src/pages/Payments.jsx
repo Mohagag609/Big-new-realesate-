@@ -3,7 +3,8 @@ import { useAppContext } from '../context/StateContext';
 import { uid } from '../utils/helpers';
 import { egp } from '../utils/formatters';
 import { parseNumber } from '../utils/parsers';
-import { unitCode, today } from '../utils/data';
+import { unitCode } from '../utils/data';
+import { today } from '../utils/helpers';
 
 const Payments = () => {
     const { appState, setAppState } = useAppContext();
