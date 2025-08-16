@@ -194,12 +194,11 @@ const routes=[
   {id:'partners',title:'الشركاء',render:renderPartners, tab: true},
   {id:'treasury',title:'الخزينة',render:renderTreasury, tab: true},
   {id:'reports',title:'التقارير',render:renderReports, tab: true},
-  {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: true},
-  {id:'safes', title:'إدارة الخزن', render:renderSafes, tab: true},
-  {id:'transfers', title: 'التحويلات', render: renderTransfers, tab: true},
+  {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: false}, // Merged into Partners screen
   {id:'audit', title: 'سجل التغييرات', render: renderAuditLog, tab: true},
   {id:'backup',title:'نسخة احتياطية',render:renderBackup, tab: true},
   {id:'unit-details', title:'تفاصيل الوحدة', render:renderUnitDetails, tab: false},
+  {id: 'broker-ledger', title: 'كشف حساب سمسار', render: renderBrokerLedger, tab: false},
 ];
 const tabs=document.getElementById('tabs'), view=document.getElementById('view');
 routes.forEach(r=>{ if(r.tab){const b=document.createElement('button'); b.className='tab'; b.id='tab-'+r.id; b.textContent=r.title; b.onclick=()=>nav(r.id); tabs.appendChild(b);} });
@@ -1103,7 +1102,10 @@ function renderUnitDetails(unitId){
 
   function drawPlans(){
     const rows = u.plans.map(p => {
-      const typeText = p.type === 'cash' ? 'كاش' : 'تقسيط';
+      let typeText = 'تقسيط';
+      if (p.type === 'cash') typeText = 'كاش';
+      if (p.type === 'other') typeText = 'أخرى';
+
       return [
         `<span contenteditable="true" onblur="editPlanProp('${p.id}', 'name', this.textContent)">${p.name}</span>`,
         `<span contenteditable="true" onblur="editPlanProp('${p.id}', 'price', this.textContent, true)">${egp(p.price)}</span>`,
@@ -1147,6 +1149,7 @@ function renderUnitDetails(unitId){
                     <select class="select" id="ud-plan-type">
                         <option value="installment">تقسيط</option>
                         <option value="cash">كاش</option>
+                        <option value="other">أخرى</option>
                     </select>
                 </div>
                 <div class="tools" style="margin-top: 8px;">
@@ -1275,8 +1278,17 @@ function editContract(contractId) {
 
 function renderContracts(){
   function draw(){
-    const rows=state.contracts.map(c=>[ c.code, unitCode(c.unitId), (custById(c.customerId)||{}).name||'—', c.planName || '—', egp(c.totalPrice), c.start, `<button class="btn" onclick="openContractDetails('${c.id}')">عرض</button> <button class="btn gold" onclick="editContract('${c.id}')">تعديل</button>`, `<button class="btn secondary" onclick="deleteContract('${c.id}')">حذف</button>` ]);
-    document.getElementById('ct-list').innerHTML=table(['كود العقد','الوحدة','العميل','خطة السعر','السعر','تاريخ البدء','إجراءات',''], rows);
+    const rows=state.contracts.map(c=>[
+        c.code,
+        unitCode(c.unitId),
+        (custById(c.customerId)||{}).name||'—',
+        c.brokerName ? `<a href="#" onclick="nav('broker-ledger', '${c.brokerName}'); return false;">${c.brokerName}</a>` : '—',
+        egp(c.totalPrice),
+        c.start,
+        `<button class="btn" onclick="openContractDetails('${c.id}')">عرض</button> <button class="btn gold" onclick="editContract('${c.id}')">تعديل</button>`,
+        `<button class="btn secondary" onclick="deleteContract('${c.id}')">حذف</button>`
+    ]);
+    document.getElementById('ct-list').innerHTML=table(['كود العقد','الوحدة','العميل','السمسار','السعر','تاريخ البدء','إجراءات',''], rows);
   }
   view.innerHTML=`
   <div class="grid">
@@ -1484,6 +1496,38 @@ function renderContracts(){
   draw();
   updatePlansForUnit();
   updateTotalInstallments();
+}
+
+function renderBrokerLedger(brokerName) {
+    if (!brokerName) {
+        return nav('contracts');
+    }
+
+    const brokerContracts = state.contracts.filter(c => c.brokerName === brokerName && c.brokerAmount > 0);
+
+    const rows = brokerContracts.map(c => [
+        c.start,
+        c.code,
+        unitCode(c.unitId),
+        egp(c.brokerAmount)
+    ]);
+
+    const totalCommission = brokerContracts.reduce((sum, c) => sum + c.brokerAmount, 0);
+
+    view.innerHTML = `
+        <div class="card">
+            <div class="header">
+                <h3>كشف حساب السمسار: ${brokerName}</h3>
+                <button class="btn secondary" onclick="nav('contracts')">⬅️ العودة للعقود</button>
+            </div>
+            <div class="card" style="margin-top: 16px;">
+                <h4>إجمالي العمولات: <span class="ok" style="color:var(--ok);">${egp(totalCommission)}</span></h4>
+            </div>
+            <div id="broker-ledger-list" style="margin-top: 16px;">
+                ${table(['تاريخ العقد', 'كود العقد', 'كود الوحدة', 'مبلغ العمولة'], rows)}
+            </div>
+        </div>
+    `;
 }
 
 /* ===== الأقساط — إضافة عمود المسدد + منع التكرار في المدفوعات ===== */
@@ -1904,28 +1948,52 @@ function renderVouchers() {
 }
 
 function renderPartners(){
-  view.innerHTML=`
-  <div class="grid grid-2">
+  let activeTab = 'partners';
+
+  view.innerHTML = `
     <div class="card">
-      <h3>إضافة شريك</h3>
-      <input class="input" id="pr-name" placeholder="اسم الشريك">
-      <input class="input" id="pr-phone" placeholder="الهاتف">
-      <button class="btn" onclick="addPartner()">حفظ</button>
-      <hr>
-      <h3>ربط شريك بوحدة</h3>
-      <select class="select" id="up-unit"><option>اختر وحدة</option>${state.units.map(u=>`<option value="${u.id}">${u.code} - ${u.name||''}</option>`).join('')}</select>
-      <select class="select" id="up-partner"><option>اختر شريك</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
-      <input class="input" id="up-percent" placeholder="النسبة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-      <button class="btn" onclick="addUnitPartner()">ربط</button>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="partners">الشركاء</button>
+        <button class="tab-btn" data-tab="debts">ديون الشركاء</button>
+      </div>
+      <div id="partners-content" style="padding-top: 16px;"></div>
     </div>
-    <div class="card">
-      <h3>الشركاء</h3>
-      <div id="pr-list"></div>
-      <hr>
-      <h3>الوحدات المشتركة</h3>
-      <div id="up-list"></div>
-    </div>
-  </div>`;
+  `;
+
+  function drawPartnersTab() {
+    document.getElementById('partners-content').innerHTML = `
+      <div class="grid grid-2">
+        <div>
+          <h3>إضافة شريك</h3>
+          <input class="input" id="pr-name" placeholder="اسم الشريك">
+          <input class="input" id="pr-phone" placeholder="الهاتف" style="margin-top:8px;">
+          <button class="btn" onclick="addPartner()" style="margin-top:8px;">حفظ</button>
+        </div>
+        <div>
+          <h3>قائمة الشركاء</h3>
+          <div id="pr-list"></div>
+        </div>
+      </div>
+    `;
+    const prRows = state.partners.map(p => [p.name, p.phone, `<button class="btn secondary" onclick="delRow('partners','${p.id}')">حذف</button>`]);
+    document.getElementById('pr-list').innerHTML = table(['الاسم', 'الهاتف', ''], prRows);
+  }
+
+  function drawDebtsTab() {
+    document.getElementById('partners-content').innerHTML = `<div id="pd-list"></div>`;
+    let sort = { idx: 3, dir: 'asc' };
+    const list = state.partnerDebts.slice().sort((a,b) => (a.dueDate||'').localeCompare(b.dueDate||''));
+    const rows = list.map(d => {
+      const paying = partnerById(d.payingPartnerId)?.name || 'محذوف';
+      const owed = partnerById(d.owedPartnerId)?.name || 'محذوف';
+      const unit = unitCode(d.unitId);
+      const payButton = d.status !== 'مدفوع' ? `<button class="btn ok" onclick="payPartnerDebt('${d.id}')">تسجيل السداد</button>` : 'تم السداد';
+      return [paying, owed, unit, d.dueDate, egp(d.amount), d.status, payButton];
+    });
+    const headers = ['الشريك الدافع', 'الشريك المستحق', 'الوحدة', 'تاريخ الاستحقاق', 'المبلغ', 'الحالة', ''];
+    document.getElementById('pd-list').innerHTML = table(headers, rows, sort, (ns) => { sort = ns; drawDebtsTab(); });
+  }
+
   window.addPartner=()=>{
     const name=document.getElementById('pr-name').value.trim(); if(!name) return;
     const phone = document.getElementById('pr-phone').value;
@@ -1933,71 +2001,129 @@ function renderPartners(){
     const newPartner = {id:uid('PR'),name,phone};
     logAction('إضافة شريك جديد', { partnerId: newPartner.id, name });
     state.partners.push(newPartner);
-    persist(); nav('partners');
+    persist();
+    nav('partners');
   };
-  window.addUnitPartner=()=>{
-    const unitId=document.getElementById('up-unit').value, partnerId=document.getElementById('up-partner').value;
-    const percent=parseNumber(document.getElementById('up-percent').value);
-    if(!unitId||!partnerId||!percent) return;
-    saveState();
-    state.unitPartners.push({id:uid('UP'),unitId,partnerId,percent});
-    persist(); nav('partners');
+
+  window.payPartnerDebt = (debtId) => {
+    const debt = state.partnerDebts.find(d => d.id === debtId);
+    if(!debt) return alert('لم يتم العثور على الدين.');
+    if(confirm(`هل تؤكد سداد هذا الدين بمبلغ ${egp(debt.amount)}؟`)){
+        saveState();
+        debt.status = 'مدفوع';
+        debt.paymentDate = today();
+        persist();
+        drawDebtsTab();
+    }
   };
-  const prRows=state.partners.map(p=>[p.name,p.phone,`<button class="btn secondary" onclick="delRow('partners','${p.id}')">حذف</button>`]);
-  document.getElementById('pr-list').innerHTML=table(['الاسم','الهاتف',''], prRows);
-  const upRows=state.unitPartners.map(up=>[unitCode(up.unitId),(partnerById(up.partnerId)||{}).name||'—',up.percent+'%',`<button class="btn secondary" onclick="delRow('unitPartners','${up.id}')">حذف</button>`]);
-  document.getElementById('up-list').innerHTML=table(['الوحدة','الشريك','النسبة',''], upRows);
+
+  function setActiveTab() {
+    if (activeTab === 'partners') {
+      drawPartnersTab();
+    } else {
+      drawDebtsTab();
+    }
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.onclick = () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeTab = btn.dataset.tab;
+        setActiveTab();
+    };
+  });
+
+  setActiveTab();
 }
 
 let lastReportData = null;
 
-/* ===== الخزينة ===== */
+/* ===== الخزينة الموحدة ===== */
 function renderTreasury() {
     view.innerHTML = `
         <div class="card">
-            <h3>الخزينة</h3>
-            <p>اختر شريكًا لعرض سجله المالي المفصل.</p>
-            <div class="tools">
-                <select class="select" id="treasury-partner-select" style="max-width: 300px;">
-                    <option value="">اختر شريك...</option>
-                    ${state.partners.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
-                </select>
+            <div class="header">
+                <h3>إدارة الخزينة</h3>
+                <div class="tools">
+                    <button class="btn" onclick="showAddSafeModal()">إضافة خزنة جديدة</button>
+                    <button class="btn secondary" onclick="showAddTransferModal()">تسجيل تحويل</button>
+                </div>
             </div>
-            <div id="treasury-ledger">
-                <p style="color: var(--muted);">الرجاء اختيار شريك لعرض البيانات.</p>
-            </div>
+            <div id="safes-list" style="margin-top: 16px;"></div>
         </div>
     `;
 
-    document.getElementById('treasury-partner-select').onchange = (e) => {
-        const partnerId = e.target.value;
-        const ledgerDiv = document.getElementById('treasury-ledger');
-        if (!partnerId) {
-            ledgerDiv.innerHTML = `<p style="color: var(--muted);">الرجاء اختيار شريك لعرض البيانات.</p>`;
-            return;
+    function draw() {
+        const rows = state.safes.map(s => [
+            `<a href="#" onclick="alert('Feature to view transactions per safe is coming soon!'); return false;">${s.name || ''}</a>`,
+            `<span>${egp(s.balance || 0)}</span>`,
+        ]);
+        document.getElementById('safes-list').innerHTML = table(['اسم الخزنة', 'الرصيد الحالي'], rows);
+    }
+
+    draw();
+}
+
+function showAddSafeModal() {
+    const content = `
+        <input class="input" id="s-name" placeholder="اسم الخزنة (مثلاً: الخزنة الرئيسية، حساب البنك)">
+        <input class="input" id="s-balance" placeholder="الرصيد الافتتاحي" type="number" value="0" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+    `;
+    showModal('إضافة خزنة جديدة', content, () => {
+        const name = document.getElementById('s-name').value.trim();
+        const balance = parseNumber(document.getElementById('s-balance').value);
+        if (!name) { alert('الرجاء إدخال اسم الخزنة.'); return false; }
+        if (state.safes.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+            alert('خزنة بنفس الاسم موجودة بالفعل.'); return false;
         }
+        saveState();
+        const newSafe = { id: uid('S'), name, balance };
+        state.safes.push(newSafe);
+        logAction('إضافة خزنة جديدة', { safeId: newSafe.id, name, initialBalance: balance });
+        persist();
+        nav('treasury');
+        return true;
+    });
+}
 
-        const transactions = generatePartnerLedger(partnerId);
-        if (transactions.length === 0) {
-            ledgerDiv.innerHTML = `<p style="color: var(--muted);">لا توجد معاملات لهذا الشريك.</p>`;
-            return;
-        }
+function showAddTransferModal() {
+    const safeOptions = state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+    const content = `
+      <div class="grid grid-2" style="gap:10px;">
+        <select class="select" id="t-from"><option value="">من خزنة...</option>${safeOptions}</select>
+        <select class="select" id="t-to"><option value="">إلى خزنة...</option>${safeOptions}</select>
+      </div>
+      <input class="input" id="t-amount" type="number" placeholder="المبلغ" style="margin-top:10px;">
+      <input class="input" id="t-date" type="date" value="${today()}" style="margin-top:10px;">
+      <textarea class="input" id="t-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
+    `;
+    showModal('تسجيل تحويل بين الخزن', content, () => {
+        const fromSafeId = document.getElementById('t-from').value;
+        const toSafeId = document.getElementById('t-to').value;
+        const amount = parseNumber(document.getElementById('t-amount').value);
+        const date = document.getElementById('t-date').value;
+        const notes = document.getElementById('t-notes').value.trim();
 
-        let balance = 0;
-        const rows = transactions.map(tx => {
-            balance += (tx.income || 0) - (tx.expense || 0);
-            return [
-                tx.date,
-                tx.description,
-                `<span style="color:var(--ok)">${tx.income ? egp(tx.income) : '—'}</span>`,
-                `<span style="color:var(--warn)">${tx.expense ? egp(tx.expense) : '—'}</span>`,
-                `<strong style="color:var(--brand)">${egp(balance)}</strong>`
-            ];
-        });
+        if (!fromSafeId || !toSafeId || !amount) { alert('الرجاء ملء جميع الحقول.'); return false; }
+        if (fromSafeId === toSafeId) { alert('لا يمكن التحويل إلى نفس الخزنة.'); return false; }
 
-        const headers = ['التاريخ', 'الوصف', 'الدخل', 'المصروفات', 'الرصيد'];
-        ledgerDiv.innerHTML = table(headers, rows);
-    };
+        const fromSafe = state.safes.find(s => s.id === fromSafeId);
+        const toSafe = state.safes.find(s => s.id === toSafeId);
+        if (fromSafe.balance < amount) { alert(`رصيد الخزنة "${fromSafe.name}" غير كافٍ.`); return false; }
+
+        saveState();
+        fromSafe.balance -= amount;
+        toSafe.balance += amount;
+
+        const newTransfer = { id: uid('T'), fromSafeId, toSafeId, amount, date, notes };
+        state.transfers.push(newTransfer);
+        logAction('تنفيذ تحويل بين الخزن', newTransfer);
+
+        persist();
+        nav('treasury');
+        return true;
+    });
 }
 
 const REPORT_DEFINITIONS = {
