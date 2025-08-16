@@ -2564,6 +2564,27 @@ window.runReport=(type)=>{
   const to=document.getElementById('rep-to')?.value;
   let title='', headers=[], rows=[];
   const out=document.getElementById('rep-out'); out.innerHTML='';
+
+  // Helper function to find a contract from various references
+  const getContractFromRef = (refId) => {
+    if (!refId) return null;
+    let contract = state.contracts.find(c => c.id === refId);
+    if (contract) return contract;
+
+    const installment = state.installments.find(i => i.id === refId);
+    if (installment) {
+        return state.contracts.find(c => c.unitId === installment.unitId);
+    }
+
+    // Fallback for direct unitId, not ideal but might be used
+    const contractsForUnit = state.contracts.filter(c => c.unitId === refId);
+    if (contractsForUnit.length > 0) {
+      return contractsForUnit.sort((a,b) => (b.start||'').localeCompare(a.start||''))[0];
+    }
+    return null;
+  };
+
+
   switch(type){
     case 'units_status':
       title='تقرير حالة الوحدات'; headers=['الحالة','العدد','إجمالي السعر'];
@@ -2572,16 +2593,23 @@ window.runReport=(type)=>{
       break;
     case 'cust_activity':
       title='تقرير نشاط العملاء'; headers=['العميل','عدد الوحدات','إجمالي المدفوعات'];
-      const custs={}; state.contracts.forEach(c=>{ custs[c.customerId]=(custs[c.customerId]||{u:new Set(),p:0}); custs[c.customerId].u.add(c.unitId); });
-
-      let custPays=state.payments.slice();
-      if(from) custPays=custPays.filter(p=>p.date>=from);
-      if(to) custPays=custPays.filter(p=>p.date<=to);
-      custPays.forEach(p=>{
-        const ct=state.contracts.find(c=>c.unitId===p.unitId);
-        if(ct&&ct.customerId&&custs[ct.customerId]) custs[ct.customerId].p+=Number(p.amount||0);
+      const custs={};
+      state.customers.forEach(c => {
+        custs[c.id] = { name: c.name, u: new Set(), p: 0 };
       });
-      rows=Object.keys(custs).map(k=>[(custById(k)||{}).name||k,custs[k].u.size,egp(custs[k].p)]);
+
+      let filteredVouchers = state.vouchers.filter(v => v.type === 'receipt');
+      if(from) filteredVouchers = filteredVouchers.filter(v => v.date >= from);
+      if(to) filteredVouchers = filteredVouchers.filter(v => v.date <= to);
+
+      filteredVouchers.forEach(v => {
+        const contract = getContractFromRef(v.linked_ref);
+        if (contract && custs[contract.customerId]) {
+          custs[contract.customerId].p += v.amount;
+          custs[contract.customerId].u.add(contract.unitId);
+        }
+      });
+      rows = Object.values(custs).map(c => [c.name, c.u.size, egp(c.p)]);
       break;
     case 'inst_due':
       title='تقرير الأقساط المستحقة'; headers=['الوحدة','العميل','المبلغ','تاريخ الاستحقاق'];
@@ -2592,15 +2620,15 @@ window.runReport=(type)=>{
     case 'inst_overdue':
       title='تقرير الأقساط المتأخرة فقط';
       headers=['الوحدة', 'العميل', 'المبلغ', 'تاريخ الاستحقاق', 'أيام التأخير'];
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      const todayDate = new Date();
+      todayDate.setHours(0,0,0,0);
       let overdueInst = state.installments.filter(i => {
-          return i.status !== 'مدفوع' && i.dueDate && new Date(i.dueDate) < today;
+          return i.status !== 'مدفوع' && i.dueDate && new Date(i.dueDate) < todayDate;
       });
       if (from) overdueInst = overdueInst.filter(i => i.dueDate >= from);
       if (to) overdueInst = overdueInst.filter(i => i.dueDate <= to);
       rows = overdueInst.map(i => {
-        const delay = Math.floor((today - new Date(i.dueDate)) / (1000 * 60 * 60 * 24));
+        const delay = Math.floor((todayDate - new Date(i.dueDate)) / (1000 * 60 * 60 * 24));
         return [
           unitCode(i.unitId),
           (custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,
@@ -2612,11 +2640,17 @@ window.runReport=(type)=>{
       break;
     case 'payments_monthly':
       title='تقرير المدفوعات الشهرية'; headers=['الشهر','إجمالي المدفوعات'];
-      let pays=state.payments.slice();
-      if(from) pays=pays.filter(p=>p.date>=from); if(to) pays=pays.filter(p=>p.date<=to);
-      const months={}; pays.forEach(p=>{ const ym=p.date.slice(0,7); months[ym]=(months[ym]||0)+Number(p.amount||0); });
-      const reportData = Object.keys(months).sort().map(k=>({month: k, total: months[k]}));
-      rows=reportData.map(r=>[r.month, egp(r.total)]);
+      let receiptVouchers = state.vouchers.filter(v => v.type === 'receipt');
+      if(from) receiptVouchers = receiptVouchers.filter(v => v.date >= from);
+      if(to) receiptVouchers = receiptVouchers.filter(v => v.date <= to);
+
+      const months={};
+      receiptVouchers.forEach(v => {
+        const ym = v.date.slice(0,7);
+        months[ym] = (months[ym] || 0) + Number(v.amount || 0);
+      });
+      const reportData = Object.keys(months).sort().map(k => ({month: k, total: months[k]}));
+      rows = reportData.map(r => [r.month, egp(r.total)]);
 
       lastReportData = { title, headers, rows: reportData.map(r=>[r.month, r.total]) }; // Store raw data for charting
       const bodyHTML=`<canvas id="reportChart" height="150"></canvas><hr><h1>${title}</h1>`+table(headers,rows);
@@ -2649,34 +2683,26 @@ window.runReport=(type)=>{
         summary[p.id] = { name: p.name, income: 0, expense: 0 };
       });
 
-      const transactions = [];
-      state.payments.forEach(p => {
-        if ((!from || p.date >= from) && (!to || p.date <= to)) {
-            transactions.push({ type: 'payment', data: p });
-        }
-      });
-       state.contracts.forEach(c => {
-        if ((!from || c.start >= from) && (!to || c.start <= to)) {
-            transactions.push({ type: 'contract', data: c });
-        }
-      });
+      let vouchersForSummary = state.vouchers.slice();
+      if(from) vouchersForSummary = vouchersForSummary.filter(v => v.date >= from);
+      if(to) vouchersForSummary = vouchersForSummary.filter(v => v.date <= to);
 
-      transactions.forEach(tx => {
-        const item = tx.data;
-        const unitId = item.unitId || (tx.type === 'contract' ? item.unitId : null);
-        if (!unitId) return;
+      vouchersForSummary.forEach(v => {
+        const contract = getContractFromRef(v.linked_ref);
+        if (!contract) return;
 
-        const unitPartners = state.unitPartners.filter(up => up.unitId === unitId);
+        const unitPartners = state.unitPartners.filter(up => up.unitId === contract.unitId);
+        if (unitPartners.length === 0) return;
+
         unitPartners.forEach(link => {
           if (summary[link.partnerId]) {
-            if (tx.type === 'payment') {
-              summary[link.partnerId].income += item.amount * (link.percent / 100);
-            } else if (tx.type === 'contract') {
-              if (item.downPayment > 0) {
-                summary[link.partnerId].income += item.downPayment * (link.percent / 100);
-              }
-              if (item.brokerAmount > 0) {
-                summary[link.partnerId].expense += item.brokerAmount * (link.percent / 100);
+            const share = link.percent / 100;
+            if (v.type === 'receipt') {
+              summary[link.partnerId].income += v.amount * share;
+            } else if (v.type === 'payment') {
+              // We only count expenses that are linked to units, like commissions.
+              if (v.description.includes('عمولة') || v.description.includes('صيانة')) {
+                 summary[link.partnerId].expense += v.amount * share;
               }
             }
           }
@@ -2692,14 +2718,20 @@ window.runReport=(type)=>{
       break;
     case 'partner_profits':
       title='تقرير أرباح الشركاء'; headers=['الشريك','الوحدة','إجمالي الدفعة','نسبة الشريك','ربح الشريك'];
-      let partnerPays=state.payments.slice();
-      if(from) partnerPays=partnerPays.filter(p=>p.date>=from); if(to) partnerPays=partnerPays.filter(p=>p.date<=to);
+      let receiptVouchersForProfit = state.vouchers.filter(v => v.type === 'receipt');
+      if(from) receiptVouchersForProfit = receiptVouchersForProfit.filter(v => v.date >= from);
+      if(to) receiptVouchersForProfit = receiptVouchersForProfit.filter(v => v.date <= to);
+
       const partnerIdForProfit = document.getElementById('rep-partner-sel')?.value;
-      partnerPays.forEach(p=>{
-        const links=state.unitPartners.filter(up=>up.unitId===p.unitId && (!partnerIdForProfit || up.partnerId === partnerIdForProfit));
-        links.forEach(l=>{
-          const profit=Math.round((p.amount*l.percent/100)*100)/100;
-          rows.push([(partnerById(l.partnerId)||{}).name||'—',unitCode(p.unitId),egp(p.amount),l.percent+'%',egp(profit)]);
+
+      receiptVouchersForProfit.forEach(v => {
+        const contract = getContractFromRef(v.linked_ref);
+        if (!contract) return;
+
+        const links = state.unitPartners.filter(up => up.unitId === contract.unitId && (!partnerIdForProfit || up.partnerId === partnerIdForProfit));
+        links.forEach(l => {
+          const profit = Math.round((v.amount * l.percent / 100) * 100) / 100;
+          rows.push([(partnerById(l.partnerId)||{}).name||'—', unitCode(contract.unitId), egp(v.amount), l.percent+'%', egp(profit)]);
         });
       });
       break;
@@ -2714,13 +2746,15 @@ window.runReport=(type)=>{
       const partner = partnerById(partnerId);
       title += ` - ${partner.name}`;
 
-      let paysForPartner = state.payments.slice();
+      let paysForPartner = state.vouchers.filter(v => v.type === 'receipt');
       if (from) paysForPartner = paysForPartner.filter(p => p.date >= from);
       if (to) paysForPartner = paysForPartner.filter(p => p.date <= to);
 
       const monthlyProfits = {};
       paysForPartner.forEach(p => {
-          const link = state.unitPartners.find(up => up.unitId === p.unitId && up.partnerId === partnerId);
+          const contract = getContractFromRef(p.linked_ref);
+          if (!contract) return;
+          const link = state.unitPartners.find(up => up.unitId === contract.unitId && up.partnerId === partnerId);
           if (link) {
               const profit = (p.amount * link.percent / 100);
               const month = p.date.slice(0, 7);
@@ -2735,23 +2769,18 @@ window.runReport=(type)=>{
       break;
     case 'cashflow':
       title='تقرير التدفقات النقدية العامة'; headers=['التاريخ','البيان','مدين','دائن','الرصيد'];
-      let trans=[];
-      let payFlow=state.payments.slice();
-      if(from) payFlow=payFlow.filter(p=>p.date>=from); if(to) payFlow=payFlow.filter(p=>p.date<=to);
-      payFlow.forEach(p=>trans.push({d:p.date,n:`دفعة وحدة ${unitCode(p.unitId)}`,i:p.amount,o:0}));
+      let trans = state.vouchers.slice();
+      if(from) trans = trans.filter(v => v.date >= from);
+      if(to) trans = trans.filter(v => v.date <= to);
 
-      state.contracts.forEach(c=>{
-        if(c.brokerAmount > 0) {
-          const include = (!from || c.start >= from) && (!to || c.start <= to);
-          if(include) {
-            trans.push({d:c.start, n:`عمولة سمسار ${unitCode(c.unitId)}`, i:0, o:c.brokerAmount});
-          }
-        }
-      });
-
-      trans.sort((a,b)=>a.d.localeCompare(b.d));
+      trans.sort((a,b) => (a.date||'').localeCompare(b.date||''));
       let bal=0;
-      rows=trans.map(t=>{ bal+=Number(t.i||0)-Number(t.o||0); return [t.d,t.n,egp(t.i),egp(t.o),egp(bal)]; });
+      rows=trans.map(t=>{
+        const income = t.type === 'receipt' ? t.amount : 0;
+        const outcome = t.type === 'payment' ? t.amount : 0;
+        bal += Number(income) - Number(outcome);
+        return [t.date, t.description, egp(income), egp(outcome), egp(bal)];
+      });
       break;
   }
   lastReportData = { title, headers, rows };
