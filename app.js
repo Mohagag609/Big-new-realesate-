@@ -1480,10 +1480,11 @@ function renderContracts(){
         <input class="input" id="ct-start" type="date" value="${today()}">
       </div>
       <div id="installment-options-wrapper">
-        <div class="grid grid-4" style="margin-top:10px;">
-            <select class="select" id="ct-type" style="grid-column: span 2;"><option>شهري</option><option>ربع سنوي</option><option>نصف سنوي</option><option>سنوي</option></select>
+        <div class="grid grid-2" style="margin-top:10px; gap: 8px;">
+            <select class="select" id="ct-type"><option>شهري</option><option>ربع سنوي</option><option>نصف سنوي</option><option>سنوي</option></select>
             <input class="input" id="ct-count" placeholder="عدد الدفعات" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
-            <input class="input" id="ct-annual-bonus" placeholder="دفعات سنوية إضافية (0-3)" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
+            <input class="input" id="ct-annual-bonus" placeholder="عدد الدفعات السنوية (0-3)" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
+            <input class="input" id="ct-annual-bonus-value" placeholder="قيمة الدفعة السنوية" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         </div>
         <div style="color:var(--muted); font-size:12px; margin-top:4px; padding-right: 5px;">
             إجمالي عدد الأقساط: <span id="ct-total-installments" style="font-weight:bold;">0</span>
@@ -1539,13 +1540,15 @@ function renderContracts(){
 
     const type=document.getElementById('ct-type').value, count=parseInt(document.getElementById('ct-count').value||'0',10);
     const extra=parseInt(document.getElementById('ct-annual-bonus').value||'0',10);
+    const annualBonusValue = parseNumber(document.getElementById('ct-annual-bonus-value').value);
     const startStr=document.getElementById('ct-start').value||today(); const start=new Date(startStr);
 
-    if(paymentType === 'installment' && count <= 0) return alert('عدد الدفعات غير صالح');
+    if(paymentType === 'installment' && count <= 0 && extra <= 0) return alert('الرجاء إدخال عدد دفعات أو عدد دفعات سنوية.');
+    if(paymentType === 'installment' && extra > 0 && annualBonusValue <= 0) return alert('الرجاء إدخال قيمة الدفعة السنوية.');
 
     // Create contract object first
     const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
-    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, brokerName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
+    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, brokerName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, type, count, extraAnnual:Math.min(Math.max(extra,0),3), annualPaymentValue: annualBonusValue, start:startStr};
     state.contracts.push(ct);
     logAction('إنشاء عقد جديد', { contractId: ct.id, unitId, customerId, price: total });
 
@@ -1574,26 +1577,41 @@ function renderContracts(){
 
     // Generate installments
     if (paymentType === 'installment') {
-        const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
-        const remain=Math.max(0, (total - discount - down));
-        const parts=count + ct.extraAnnual;
-        const base=Math.floor((remain/parts)*100)/100; let acc=0;
-        for(let i=0;i<count;i++){
-          const d=new Date(start); d.setMonth(d.getMonth()+months*(i+1));
-          const amt=(i===count-1 && ct.extraAnnual===0)? Math.round((remain-acc)*100)/100 : base; acc+=amt;
-          state.installments.push({id:uid('I'),unitId,type,amount:amt,originalAmount:amt,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+        const totalAfterDown = total - discount - down;
+        const totalAnnualPayments = extra * annualBonusValue;
+
+        if (totalAnnualPayments > totalAfterDown) {
+            return alert('خطأ: مجموع الدفعات السنوية أكبر من المبلغ المتبقي على الوحدة.');
         }
-        for(let j=0;j<ct.extraAnnual;j++){
-          const d=new Date(start); d.setMonth(d.getMonth()+12*(j+1));
-          const amt=(j===ct.extraAnnual-1)? Math.round((remain-acc)*100)/100 : base; acc+=amt;
-          state.installments.push({id:uid('I'),unitId,type:'سَنوي إضافي',amount:amt,originalAmount:amt,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+
+        const amountForRegularInstallments = totalAfterDown - totalAnnualPayments;
+
+        // Generate regular installments
+        if (count > 0) {
+            const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
+            const baseAmount = Math.floor((amountForRegularInstallments / count) * 100) / 100;
+            let accumulatedAmount = 0;
+            for(let i=0; i<count; i++){
+              const d = new Date(start);
+              d.setMonth(d.getMonth() + months * (i + 1));
+              const amount = (i === count - 1) ? Math.round((amountForRegularInstallments - accumulatedAmount) * 100) / 100 : baseAmount;
+              accumulatedAmount += amount;
+              state.installments.push({id:uid('I'),unitId,type,amount,originalAmount:amount,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+            }
+        }
+
+        // Generate annual bonus installments
+        for(let j=0; j<extra; j++){
+          const d = new Date(start);
+          d.setMonth(d.getMonth() + 12 * (j + 1));
+          state.installments.push({id:uid('I'),unitId,type:'دفعة سنوية',amount:annualBonusValue,originalAmount:annualBonusValue,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
         }
     }
 
     const u=unitById(unitId); if(u) u.status='مباعة';
     persist();
     draw();
-    printContract(ct);
+    // printContract(ct);
   };
 
   window.expContracts = () => {
