@@ -1876,64 +1876,21 @@ function renderReports(){
     </div>`;
 
   const filtersContainer = document.getElementById('rep-filters-container');
-
-  document.querySelectorAll('.report-btn').forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll('.report-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      selectedReportType = btn.dataset.type;
-
-      // Dynamically render filters based on report type
-      filtersContainer.innerHTML = ''; // Clear previous
-      const needsDates = ['payments_monthly', 'cashflow', 'partner_profits', 'inst_due', 'inst_overdue', 'cust_activity', 'partner_cashflow'];
-      const needsPartner = ['partner_profits', 'partner_cashflow'];
-
-      if (needsDates.includes(selectedReportType)) {
-        filtersContainer.innerHTML += `
-            <input type="date" class="input" id="rep-from" placeholder="من تاريخ">
-            <input type="date" class="input" id="rep-to" placeholder="إلى تاريخ">
-        `;
-      }
-      if (needsPartner.includes(selectedReportType)) {
-        filtersContainer.innerHTML += `
-          <select id="rep-partner-sel" class="select">
-              <option value="">اختر شريك...</option>
-              ${state.partners.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
-          </select>
-        `;
-      }
-    };
-  });
-
   const generateBtn = document.getElementById('generate-report-btn');
   const resetBtn = document.getElementById('reset-filters-btn');
-
-  function triggerReport() {
-    if (selectedReportType) {
-      runReport(selectedReportType);
-    }
-  }
 
   generateBtn.onclick = () => {
     if (!selectedReportType) {
       return alert('الرجاء اختيار نوع التقرير أولاً.');
     }
-    triggerReport();
+    runReport(selectedReportType);
   };
 
   resetBtn.onclick = () => {
     filtersContainer.querySelectorAll('input, select').forEach(el => {
       el.value = '';
-      el.onchange = null; // Clear old listeners
     });
     document.getElementById('rep-out').innerHTML = '';
-  };
-
-  // Attach dynamic listeners when filters are created
-  const attachListeners = () => {
-    filtersContainer.querySelectorAll('input, select').forEach(el => {
-      el.onchange = triggerReport;
-    });
   };
 
   document.querySelectorAll('.report-btn').forEach(btn => {
@@ -1961,8 +1918,6 @@ function renderReports(){
           </select>
         `;
       }
-      // Attach listeners to the newly created filters
-      attachListeners();
     };
   });
 }
