@@ -449,7 +449,10 @@ function calculateKpis(filter = {}) {
 
 /* ===== لوحة التحكم الجديدة ===== */
 function renderDash() {
-  const kpis = calculateKpis();
+  const fromDate = document.getElementById('dash-from')?.value;
+  const toDate = document.getElementById('dash-to')?.value;
+
+  const kpis = calculateKpis({ from: fromDate, to: toDate });
   const kpiHTML = `
     <div class="card"><h4>إجمالي المبيعات</h4><div class="big">${egp(kpis.totalSales)}</div></div>
     <div class="card"><h4>إجمالي المتحصلات</h4><div class="big">${egp(kpis.totalReceipts)}</div></div>
@@ -457,7 +460,25 @@ function renderDash() {
     <div class="card"><h4>إجمالي المصروفات</h4><div class="big">${egp(kpis.totalExpenses)}</div></div>
   `;
 
-  view.innerHTML = `
+  const filterHTML = `
+    <div class="panel" style="margin-bottom: 16px;">
+        <div class="tools" style="justify-content: space-between; flex-wrap: wrap;">
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <label>من:</label>
+                <input type="date" class="input" id="dash-from" value="${fromDate || ''}">
+                <label>إلى:</label>
+                <input type="date" class="input" id="dash-to" value="${toDate || ''}">
+                <button class="btn" id="dash-apply-filter">تطبيق</button>
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn secondary" onclick="alert('Export PDF coming soon!')">طباعة PDF</button>
+                <button class="btn secondary" onclick="alert('Export Excel coming soon!')">تصدير Excel</button>
+            </div>
+        </div>
+    </div>
+  `;
+
+  view.innerHTML = filterHTML + `
     <div id="kpi-container-new" class="grid grid-4 panel">
       ${kpiHTML}
     </div>
@@ -508,12 +529,18 @@ function renderDash() {
     document.getElementById('new-units-chart').parentElement.innerHTML = '<p style="color:var(--warn)">فشل تحميل الرسم البياني.</p>';
   }
 
+  document.getElementById('dash-apply-filter').onclick = () => nav('dash');
+
   // Render Upcoming Installments Table
   try {
-    const upcomingInstallments = state.installments
+    let upcomingInstallments = state.installments
       .filter(i => i.status !== 'مدفوع')
-      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
-      .slice(0, 5);
+      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+    if (fromDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate >= fromDate);
+    if (toDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate <= toDate);
+
+    upcomingInstallments = upcomingInstallments.slice(0, 5);
 
     const headers = ['الوحدة', 'العميل', 'المبلغ', 'تاريخ الاستحقاق'];
     const rows = upcomingInstallments.map(i => {
@@ -535,21 +562,27 @@ function renderDash() {
 
   // Render Recent Transactions Table
   try {
-    const transactions = [];
-    state.payments.forEach(p => transactions.push({
-      date: p.date,
-      type: 'payment',
-      amount: p.amount,
-      description: `دفعة للوحدة ${unitCode(p.unitId)}`
-    }));
+    let transactions = [];
+    state.payments.forEach(p => {
+        if( (!fromDate || p.date >= fromDate) && (!toDate || p.date <= toDate) ) {
+            transactions.push({
+              date: p.date,
+              type: 'payment',
+              amount: p.amount,
+              description: `دفعة للوحدة ${unitCode(p.unitId)}`
+            });
+        }
+    });
     state.contracts.forEach(c => {
       if (c.brokerAmount > 0) {
-        transactions.push({
-          date: c.start,
-          type: 'expense',
-          amount: c.brokerAmount,
-          description: `عمولة سمسار للوحدة ${unitCode(c.unitId)}`
-        });
+        if( (!fromDate || c.start >= fromDate) && (!toDate || c.start <= toDate) ) {
+            transactions.push({
+              date: c.start,
+              type: 'expense',
+              amount: c.brokerAmount,
+              description: `عمولة سمسار للوحدة ${unitCode(c.unitId)}`
+            });
+        }
       }
     });
 
@@ -1228,7 +1261,18 @@ function editContract(contractId) {
 
 function renderContracts(){
   function draw(){
-    const rows=state.contracts.map(c=>[
+    const q = (document.getElementById('ct-q')?.value || '').trim().toLowerCase();
+    let list = state.contracts.slice();
+    if (q) {
+        list = list.filter(c => {
+            const customerName = (custById(c.customerId) || {}).name || '';
+            const unitName = unitCode(c.unitId);
+            const searchable = `${c.code || ''} ${unitName} ${customerName} ${c.brokerName || ''}`.toLowerCase();
+            return searchable.includes(q);
+        });
+    }
+
+    const rows=list.map(c=>[
         c.code,
         unitCode(c.unitId),
         (custById(c.customerId)||{}).name||'—',
@@ -1272,11 +1316,15 @@ function renderContracts(){
       </div>
       <div class="tools">
         <button class="btn" onclick="createContract()">حفظ + توليد أقساط</button>
-        <button class="btn secondary" onclick="printContracts()">طباعة PDF</button>
       </div>
     </div>
     <div class="card">
       <h3>العقود</h3>
+      <div class="tools">
+        <input class="input" id="ct-q" placeholder="بحث بالكود, الوحدة, العميل..." oninput="draw()">
+        <button class="btn secondary" onclick="expContracts()">تصدير CSV</button>
+        <button class="btn secondary" onclick="printContracts()">طباعة PDF</button>
+      </div>
       <div id="ct-list"></div>
     </div>
   </div>`;
@@ -1359,6 +1407,22 @@ function renderContracts(){
     printContract(ct);
   };
 
+  window.expContracts = () => {
+    const headers = ['كود العقد','الوحدة','العميل','السعر','المقدم','الخصم','اسم السمسار','نسبة العمولة','مبلغ العمولة'];
+    const rows = state.contracts.map(c => [
+        c.code,
+        unitCode(c.unitId),
+        (custById(c.customerId) || {}).name || '',
+        c.totalPrice,
+        c.downPayment,
+        c.discountAmount || 0,
+        c.brokerName || '',
+        c.brokerPercent || 0,
+        c.brokerAmount || 0
+    ]);
+    exportCSV(headers, rows, 'contracts.csv');
+  };
+
   window.printContracts=()=>{
     const headers = ['الكود','الوحدة','العميل','السعر','المقدم','عمولة','نوع','عدد','بداية'];
     const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
@@ -1398,13 +1462,13 @@ function renderContracts(){
           installmentOptionsWrapper.style.display = 'block';
           downPaymentInput.readOnly = false;
       }
+      updateTotalInstallments();
   }
 
   function updateFormForUnit() {
       const unitId = unitSelect.value;
       const unit = unitById(unitId);
       totalInput.value = unit ? unit.totalPrice : '';
-      // When unit changes, also update for payment type in case price changes
       updateFormForPaymentType();
   }
 
@@ -1832,17 +1896,43 @@ function renderVouchers() {
           <button class="tab-btn" data-tab="receipt">سندات قبض</button>
           <button class="tab-btn" data-tab="payment">سندات صرف</button>
       </div>
-      <div id="vouchers-list"></div>
+      <div class="tools" style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+        <input class="input" id="v-q" placeholder="بحث بالبيان أو الطرف الآخر..." style="flex: 1;">
+        <input type="date" class="input" id="v-from">
+        <input type="date" class="input" id="v-to">
+        <button class="btn" id="v-apply-filter">فلترة</button>
+        <button class="btn secondary" onclick="expVouchers()">تصدير CSV</button>
+        <button class="btn secondary" onclick="printVouchers()">طباعة</button>
+      </div>
+      <div id="vouchers-list" style="margin-top: 12px;"></div>
     </div>
   `;
 
+  let currentList = [];
+
   function draw() {
+    const q = (document.getElementById('v-q')?.value || '').trim().toLowerCase();
+    const from = document.getElementById('v-from')?.value;
+    const to = document.getElementById('v-to')?.value;
+
     let list = state.vouchers.slice();
+
     if (activeTab !== 'all') {
       list = list.filter(v => v.type === activeTab);
     }
+    if (q) {
+        list = list.filter(v =>
+            (v.description || '').toLowerCase().includes(q) ||
+            (v.payer || '').toLowerCase().includes(q) ||
+            (v.beneficiary || '').toLowerCase().includes(q)
+        );
+    }
+    if (from) list = list.filter(v => v.date >= from);
+    if (to) list = list.filter(v => v.date <= to);
 
-    list.sort((a, b) => (b.date || '').localeCompare(a.date || '')); // Newest first
+    list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    currentList = list; // Save for export
 
     const safeName = (id) => (state.safes.find(s => s.id === id) || {}).name || '—';
 
@@ -1865,6 +1955,30 @@ function renderVouchers() {
     document.getElementById('vouchers-list').innerHTML = table(headers, rows);
   }
 
+  window.expVouchers = () => {
+      const headers = ['التاريخ', 'النوع', 'المبلغ', 'البيان', 'الخزنة', 'الدافع', 'المستفيد'];
+      const rows = currentList.map(v => [
+          v.date,
+          v.type === 'receipt' ? 'قبض' : 'صرف',
+          v.amount,
+          v.description,
+          (state.safes.find(s => s.id === v.safeId) || {}).name || '—',
+          v.payer || '',
+          v.beneficiary || ''
+      ]);
+      exportCSV(headers, rows, 'vouchers.csv');
+  };
+
+  window.printVouchers = () => {
+      const headers = ['التاريخ', 'النوع', 'المبلغ', 'البيان', 'الخزنة', 'الطرف الآخر'];
+      const rows = currentList.map(v => {
+          const typeText = v.type === 'receipt' ? 'قبض' : 'صرف';
+          const party = v.type === 'receipt' ? `من: ${v.payer || 'غير محدد'}` : `إلى: ${v.beneficiary || 'غير محدد'}`;
+          return `<tr><td>${v.date}</td><td>${typeText}</td><td>${egp(v.amount)}</td><td>${v.description}</td><td>${(state.safes.find(s=>s.id===v.safeId)||{}).name||'—'}</td><td>${party}</td></tr>`;
+      }).join('');
+      printHTML('تقرير السندات', `<h1>تقرير السندات</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
+  };
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.onclick = () => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1875,12 +1989,15 @@ function renderVouchers() {
   });
 
   document.getElementById('add-expense-btn').onclick = showAddExpenseModal;
+  document.getElementById('v-apply-filter').onclick = draw;
 
   draw();
 }
 
 function renderPartners(){
   let activeTab = 'partners';
+  let partnersList = [];
+  let debtsList = [];
 
   view.innerHTML = `
     <div class="card">
@@ -1893,6 +2010,12 @@ function renderPartners(){
   `;
 
   function drawPartnersTab() {
+    const q = (document.getElementById('pr-q')?.value || '').trim().toLowerCase();
+    partnersList = state.partners.slice();
+    if (q) {
+        partnersList = partnersList.filter(p => (p.name.toLowerCase().includes(q) || (p.phone||'').includes(q)));
+    }
+
     document.getElementById('partners-content').innerHTML = `
       <div class="grid grid-2">
         <div>
@@ -1903,11 +2026,15 @@ function renderPartners(){
         </div>
         <div>
           <h3>قائمة الشركاء</h3>
+          <div class="tools">
+             <input class="input" id="pr-q" placeholder="بحث بالاسم أو الهاتف..." oninput="drawPartnersTab()" value="${q}">
+             <button class="btn secondary" onclick="expPartners()">تصدير CSV</button>
+          </div>
           <div id="pr-list"></div>
         </div>
       </div>
     `;
-    const prRows = state.partners.map(p => [
+    const prRows = partnersList.map(p => [
         `<a href="#" onclick="nav('partner-details', '${p.id}'); return false;">${p.name}</a>`,
         p.phone,
         `<button class="btn secondary" onclick="delRow('partners','${p.id}')">حذف</button>`
@@ -1916,10 +2043,29 @@ function renderPartners(){
   }
 
   function drawDebtsTab() {
-    document.getElementById('partners-content').innerHTML = `<div id="pd-list"></div>`;
+    const q = (document.getElementById('pd-q')?.value || '').trim().toLowerCase();
+    debtsList = state.partnerDebts.slice();
+    if(q) {
+      debtsList = debtsList.filter(d => {
+        const paying = partnerById(d.payingPartnerId)?.name || '';
+        const owed = partnerById(d.owedPartnerId)?.name || '';
+        const unit = unitCode(d.unitId) || '';
+        const searchable = `${paying} ${owed} ${unit} ${d.status}`.toLowerCase();
+        return searchable.includes(q);
+      });
+    }
+
+    document.getElementById('partners-content').innerHTML = `
+        <h3>ديون الشركاء</h3>
+        <div class="tools">
+            <input class="input" id="pd-q" placeholder="بحث..." oninput="drawDebtsTab()" value="${q}">
+            <button class="btn secondary" onclick="expPartnerDebts()">تصدير CSV</button>
+        </div>
+        <div id="pd-list"></div>
+    `;
     let sort = { idx: 3, dir: 'asc' };
-    const list = state.partnerDebts.slice().sort((a,b) => (a.dueDate||'').localeCompare(b.dueDate||''));
-    const rows = list.map(d => {
+    debtsList.sort((a,b) => (a.dueDate||'').localeCompare(b.dueDate||''));
+    const rows = debtsList.map(d => {
       const paying = partnerById(d.payingPartnerId)?.name || 'محذوف';
       const owed = partnerById(d.owedPartnerId)?.name || 'محذوف';
       const unit = unitCode(d.unitId);
@@ -1953,6 +2099,23 @@ function renderPartners(){
     }
   };
 
+  window.expPartners = () => {
+      exportCSV(['الاسم', 'الهاتف'], partnersList.map(p => [p.name, p.phone]), 'partners.csv');
+  };
+
+  window.expPartnerDebts = () => {
+      const headers = ['الدافع', 'المستحق', 'الوحدة', 'تاريخ الاستحقاق', 'المبلغ', 'الحالة'];
+      const rows = debtsList.map(d => [
+          partnerById(d.payingPartnerId)?.name || 'محذوف',
+          partnerById(d.owedPartnerId)?.name || 'محذوف',
+          unitCode(d.unitId),
+          d.dueDate,
+          d.amount,
+          d.status
+      ]);
+      exportCSV(headers, rows, 'partner_debts.csv');
+  };
+
   function setActiveTab() {
     if (activeTab === 'partners') {
       drawPartnersTab();
@@ -1977,6 +2140,7 @@ let lastReportData = null;
 
 /* ===== الخزينة الموحدة ===== */
 function renderTreasury() {
+    let safesList = [];
     view.innerHTML = `
         <div class="card">
             <div class="header">
@@ -1986,17 +2150,31 @@ function renderTreasury() {
                     <button class="btn secondary" onclick="showAddTransferModal()">تسجيل تحويل</button>
                 </div>
             </div>
+            <div class="tools" style="margin-top:12px;">
+                <input class="input" id="t-q" placeholder="بحث باسم الخزنة..." oninput="draw()">
+                <button class="btn secondary" onclick="expTreasury()">تصدير CSV</button>
+            </div>
             <div id="safes-list" style="margin-top: 16px;"></div>
         </div>
     `;
 
     function draw() {
-        const rows = state.safes.map(s => [
+        const q = (document.getElementById('t-q')?.value || '').trim().toLowerCase();
+        safesList = state.safes.slice();
+        if (q) {
+            safesList = safesList.filter(s => s.name.toLowerCase().includes(q));
+        }
+
+        const rows = safesList.map(s => [
             `<a href="#" onclick="alert('Feature to view transactions per safe is coming soon!'); return false;">${s.name || ''}</a>`,
             `<span>${egp(s.balance || 0)}</span>`,
         ]);
         document.getElementById('safes-list').innerHTML = table(['اسم الخزنة', 'الرصيد الحالي'], rows);
     }
+
+    window.expTreasury = () => {
+        exportCSV(['اسم الخزنة', 'الرصيد'], safesList.map(s => [s.name, s.balance]), 'safes.csv');
+    };
 
     draw();
 }
@@ -2639,25 +2817,59 @@ function renderTransfers(){
 
 /* ===== سجل التغييرات ===== */
 function renderAuditLog(){
+  let currentLogs = [];
   view.innerHTML = `
     <div class="card">
       <h3>سجل تتبع التغييرات</h3>
-      <p>يعرض هذا السجل آخر 200 إجراء تم في النظام.</p>
-      <div id="audit-list"></div>
+      <p>يعرض هذا السجل آخر 500 إجراء تم في النظام.</p>
+      <div class="tools">
+        <input class="input" id="al-q" placeholder="بحث بالوصف..." oninput="draw()" style="flex:1;">
+        <input type="date" class="input" id="al-from" oninput="draw()">
+        <input type="date" class="input" id="al-to" oninput="draw()">
+        <button class="btn secondary" onclick="expAuditLog()">تصدير CSV</button>
+      </div>
+      <div id="audit-list" style="margin-top:12px;"></div>
     </div>
   `;
 
-  const logs = state.auditLog.slice(-200).reverse(); // Get last 200 and reverse to show newest first
-  const rows = logs.map(log => {
-    const time = new Date(log.timestamp).toLocaleString('ar-EG');
-    return [
-      time,
-      log.description,
-      `<pre style="white-space:pre-wrap;font-size:11px;max-width:400px;word-break:break-all;">${JSON.stringify(log.details, null, 2)}</pre>`
-    ];
-  });
+  function draw() {
+    const q = (document.getElementById('al-q')?.value || '').trim().toLowerCase();
+    const from = document.getElementById('al-from')?.value;
+    const to = document.getElementById('al-to')?.value;
 
-  document.getElementById('audit-list').innerHTML = table(['الوقت والتاريخ', 'الإجراء', 'التفاصيل'], rows);
+    let logs = state.auditLog.slice(-500).reverse();
+
+    if (q) {
+      logs = logs.filter(log => (log.description || '').toLowerCase().includes(q));
+    }
+    if (from) {
+      logs = logs.filter(log => log.timestamp.slice(0, 10) >= from);
+    }
+    if (to) {
+      logs = logs.filter(log => log.timestamp.slice(0, 10) <= to);
+    }
+
+    currentLogs = logs;
+
+    const rows = logs.map(log => {
+      const time = new Date(log.timestamp).toLocaleString('ar-EG');
+      return [
+        time,
+        log.description,
+        `<pre style="white-space:pre-wrap;font-size:11px;max-width:400px;word-break:break-all;">${JSON.stringify(log.details, null, 2)}</pre>`
+      ];
+    });
+
+    document.getElementById('audit-list').innerHTML = table(['الوقت والتاريخ', 'الإجراء', 'التفاصيل'], rows);
+  }
+
+  window.expAuditLog = () => {
+      const headers = ['Timestamp', 'Action', 'Details'];
+      const rows = currentLogs.map(log => [log.timestamp, log.description, JSON.stringify(log.details)]);
+      exportCSV(headers, rows, 'audit_log.csv');
+  };
+
+  draw();
 }
 
 /* ===== نسخة احتياطية ===== */
