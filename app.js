@@ -365,80 +365,129 @@ function calculateKpis(filter = {}) {
 /* ===== لوحة التحكم الجديدة ===== */
 function renderDash() {
   const kpis = calculateKpis();
+  const kpiHTML = `
+    <div class="card"><h4>إجمالي المبيعات</h4><div class="big">${egp(kpis.totalSales)}</div></div>
+    <div class="card"><h4>إجمالي المتحصلات</h4><div class="big">${egp(kpis.totalReceipts)}</div></div>
+    <div class="card"><h4>إجمالي المديونية</h4><div class="big">${egp(kpis.totalDebt)}</div></div>
+    <div class="card"><h4>إجمالي المصروفات</h4><div class="big">${egp(kpis.totalExpenses)}</div></div>
+  `;
 
   view.innerHTML = `
-    <div class="panel">
-      <div class="header">
-        <h2>لوحة تحكم المشروع</h2>
-        <div class="tools">
-          <input type="date" id="dash-from" class="input">
-          <input type="date" id="dash-to" class="input">
-          <button class="btn" id="dash-apply">تطبيق</button>
-          <button class="btn secondary" id="dash-reset">إعادة تعيين</button>
+    <div id="kpi-container-new" class="grid grid-4 panel">
+      ${kpiHTML}
+    </div>
+
+    <div class="grid grid-3" style="margin-top:16px; gap:16px; align-items:flex-start;">
+      <div class="panel" style="grid-column: span 2;">
+        <h3>الأقساط القادمة والمتأخرة</h3>
+        <div id="upcoming-installments-table">
+          <p style="color:var(--muted); font-size:12px;">سيتم عرض الأقساط هنا...</p>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>حالة الوحدات</h3>
+        <div class="chart-container" style="position: relative; height:200px; width:100%">
+          <canvas id="new-units-chart"></canvas>
         </div>
       </div>
     </div>
 
     <div class="panel" style="margin-top:16px;">
-        <h3>المؤشرات الرئيسية (KPIs)</h3>
-        <div id="kpi-container" class="grid grid-4" style="margin-top:10px;">
-            <div class="card"><h4>إجمالي المبيعات</h4><div class="big">${egp(kpis.totalSales)}</div></div>
-            <div class="card"><h4>إجمالي المتحصلات</h4><div class="big">${egp(kpis.totalReceipts)}</div></div>
-            <div class="card"><h4>إجمالي المديونية</h4><div class="big">${egp(kpis.totalDebt)}</div></div>
-            <div class="card"><h4>نسبة التحصيل</h4><div class="big">${kpis.collectionPercentage.toFixed(1)}%</div></div>
-            <div class="card"><h4>إجمالي المصروفات</h4><div class="big">${egp(kpis.totalExpenses)}</div></div>
-            <div class="card"><h4>صافي الربح</h4><div class="big">${egp(kpis.netProfit)}</div></div>
-            <div class="card"><h4>عدد الوحدات</h4><div class="big">${kpis.unitCounts.total} (<span style="color:var(--ok)">${kpis.unitCounts.available}</span> | <span style="color:var(--warn)">${kpis.unitCounts.sold}</span>)</div></div>
-            <div class="card"><h4>عدد المستثمرين</h4><div class="big">${kpis.investorCount}</div></div>
-        </div>
-    </div>
-
-    <div class="grid grid-2" style="margin-top:16px; gap:16px; align-items:flex-start;">
-        <div class="panel">
-            <h3>ملخص المستثمرين</h3>
-            <div id="investor-summary-table">
-                <!-- Investor summary table will go here -->
-                <p style="color:var(--muted); font-size:12px;">سيتم عرض ملخص أداء المستثمرين هنا.</p>
-            </div>
-        </div>
-        <div class="panel">
-            <h3>أحدث الحركات المالية</h3>
-            <div id="financial-movements-table">
-                <!-- Financial movements table will go here -->
-                <p style="color:var(--muted); font-size:12px;">سيتم عرض أحدث الحركات المالية هنا.</p>
-            </div>
-        </div>
-    </div>
-
-    <div class="panel" style="margin-top:16px;">
-        <h3>الأقساط</h3>
-        <div id="installments-due-table">
-            <!-- Due installments table will go here -->
-            <p style="color:var(--muted); font-size:12px;">سيتم عرض الأقساط المستحقة والمتأخرة هنا.</p>
-        </div>
-    </div>
-
-     <div class="grid grid-3" style="margin-top:16px; gap:16px;">
-        <div class="panel">
-            <h3>المبيعات مقابل التحصيلات</h3>
-            <div id="sales-vs-receipts-chart">
-                 <!-- Sales vs Receipts chart will go here -->
-            </div>
-        </div>
-        <div class="panel">
-            <h3>توزيع المصروفات</h3>
-            <div id="expense-distribution-chart">
-                 <!-- Expense chart will go here -->
-            </div>
-        </div>
-        <div class="panel">
-            <h3>حالة الوحدات</h3>
-            <div id="unit-status-chart">
-                 <!-- Unit status chart will go here -->
-            </div>
-        </div>
+      <h3>أحدث الحركات المالية</h3>
+      <div id="recent-transactions-table">
+        <p style="color:var(--muted); font-size:12px;">سيتم عرض أحدث الحركات هنا...</p>
+      </div>
     </div>
   `;
+
+  // Render Unit Status Chart
+  try {
+    new Chart(document.getElementById('new-units-chart').getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: ['متاحة', 'مباعة', 'محجوزة'],
+        datasets: [{
+          data: [kpis.unitCounts.available, kpis.unitCounts.sold, kpis.unitCounts.reserved],
+          backgroundColor: ['#2563eb', '#16a34a', '#f59e0b'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: {font: { family: 'system-ui' }} } }
+      }
+    });
+  } catch(e) {
+    console.error("Failed to render unit status chart:", e);
+    document.getElementById('new-units-chart').parentElement.innerHTML = '<p style="color:var(--warn)">فشل تحميل الرسم البياني.</p>';
+  }
+
+  // Render Upcoming Installments Table
+  try {
+    const upcomingInstallments = state.installments
+      .filter(i => i.status !== 'مدفوع')
+      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
+      .slice(0, 5);
+
+    const headers = ['الوحدة', 'العميل', 'المبلغ', 'تاريخ الاستحقاق'];
+    const rows = upcomingInstallments.map(i => {
+      const contract = state.contracts.find(c => c.unitId === i.unitId);
+      const customer = contract ? custById(contract.customerId) : null;
+      return [
+        unitCode(i.unitId),
+        customer ? customer.name : '—',
+        egp(i.amount),
+        i.dueDate
+      ];
+    });
+
+    document.getElementById('upcoming-installments-table').innerHTML = table(headers, rows);
+  } catch(e) {
+    console.error("Failed to render upcoming installments table:", e);
+    document.getElementById('upcoming-installments-table').innerHTML = '<p style="color:var(--warn)">فشل تحميل جدول الأقساط.</p>';
+  }
+
+  // Render Recent Transactions Table
+  try {
+    const transactions = [];
+    state.payments.forEach(p => transactions.push({
+      date: p.date,
+      type: 'payment',
+      amount: p.amount,
+      description: `دفعة للوحدة ${unitCode(p.unitId)}`
+    }));
+    state.contracts.forEach(c => {
+      if (c.brokerAmount > 0) {
+        transactions.push({
+          date: c.start,
+          type: 'expense',
+          amount: c.brokerAmount,
+          description: `عمولة سمسار للوحدة ${unitCode(c.unitId)}`
+        });
+      }
+    });
+
+    const recentTransactions = transactions
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 5);
+
+    const headers = ['التاريخ', 'البيان', 'المبلغ'];
+    const rows = recentTransactions.map(t => {
+      const amountStyle = t.type === 'payment' ? 'color:var(--ok)' : 'color:var(--warn)';
+      const amountPrefix = t.type === 'payment' ? '+' : '-';
+      return [
+        t.date,
+        t.description,
+        `<span style="${amountStyle}; font-weight:bold;">${amountPrefix} ${egp(t.amount)}</span>`
+      ];
+    });
+
+    document.getElementById('recent-transactions-table').innerHTML = table(headers, rows);
+  } catch(e) {
+    console.error("Failed to render recent transactions table:", e);
+    document.getElementById('recent-transactions-table').innerHTML = '<p style="color:var(--warn)">فشل تحميل جدول الحركات المالية.</p>';
+  }
 }
 
 /* ===== لوحة التحكم القديمة ===== */
