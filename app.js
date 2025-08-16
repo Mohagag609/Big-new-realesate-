@@ -448,6 +448,53 @@ function calculateKpis(filter = {}) {
 }
 
 /* ===== لوحة التحكم الجديدة ===== */
+function exportDashboardExcel() {
+    const fromDate = document.getElementById('dash-from')?.value;
+    const toDate = document.getElementById('dash-to')?.value;
+
+    const kpis = calculateKpis({ from: fromDate, to: toDate });
+    const kpiData = [
+        ['المؤشر', 'القيمة'],
+        ['إجمالي المبيعات', kpis.totalSales],
+        ['إجمالي المتحصلات', kpis.totalReceipts],
+        ['إجمالي المديونية', kpis.totalDebt],
+        ['إجمالي المصروفات', kpis.totalExpenses],
+    ];
+
+    let upcomingInstallments = state.installments.filter(i => i.status !== 'مدفوع').sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+    if (fromDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate >= fromDate);
+    if (toDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate <= toDate);
+    const installmentData = upcomingInstallments.map(i => ({
+        'الوحدة': unitCode(i.unitId),
+        'العميل': (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name,
+        'المبلغ': i.amount,
+        'تاريخ الاستحقاق': i.dueDate
+    }));
+
+    let transactions = [];
+    state.vouchers.forEach(v => {
+        if ((!fromDate || v.date >= fromDate) && (!toDate || v.date <= toDate)) {
+            transactions.push({
+                'التاريخ': v.date,
+                'النوع': v.type === 'receipt' ? 'قبض' : 'صرف',
+                'المبلغ': v.amount,
+                'البيان': v.description
+            });
+        }
+    });
+
+    const wb = XLSX.utils.book_new();
+    const wsKpis = XLSX.utils.aoa_to_sheet(kpiData);
+    const wsInstallments = XLSX.utils.json_to_sheet(installmentData);
+    const wsTransactions = XLSX.utils.json_to_sheet(transactions.sort((a, b) => (b.Date || '').localeCompare(a.Date || '')));
+
+    XLSX.utils.book_append_sheet(wb, wsKpis, "المؤشرات الرئيسية");
+    XLSX.utils.book_append_sheet(wb, wsInstallments, "الأقساط القادمة");
+    XLSX.utils.book_append_sheet(wb, wsTransactions, "أحدث الحركات");
+
+    XLSX.writeFile(wb, `dashboard_export_${today()}.xlsx`);
+}
+
 function renderDash() {
   const fromDate = document.getElementById('dash-from')?.value;
   const toDate = document.getElementById('dash-to')?.value;
@@ -471,8 +518,8 @@ function renderDash() {
                 <button class="btn" id="dash-apply-filter">تطبيق</button>
             </div>
             <div style="display: flex; gap: 8px;">
-                <button class="btn secondary" onclick="alert('Export PDF coming soon!')">طباعة PDF</button>
-                <button class="btn secondary" onclick="alert('Export Excel coming soon!')">تصدير Excel</button>
+                <button class="btn secondary" onclick="printHTML('لوحة التحكم', document.getElementById('view').innerHTML)">طباعة PDF</button>
+                <button class="btn secondary" onclick="exportDashboardExcel()">تصدير Excel</button>
             </div>
         </div>
     </div>
@@ -563,37 +610,22 @@ function renderDash() {
   // Render Recent Transactions Table
   try {
     let transactions = [];
-    state.payments.forEach(p => {
-        if( (!fromDate || p.date >= fromDate) && (!toDate || p.date <= toDate) ) {
+    state.vouchers.forEach(v => {
+        if ((!fromDate || v.date >= fromDate) && (!toDate || v.date <= toDate)) {
             transactions.push({
-              date: p.date,
-              type: 'payment',
-              amount: p.amount,
-              description: `دفعة للوحدة ${unitCode(p.unitId)}`
+                date: v.date,
+                type: v.type, // 'receipt' or 'payment'
+                amount: v.amount,
+                description: v.description
             });
         }
     });
-    state.contracts.forEach(c => {
-      if (c.brokerAmount > 0) {
-        if( (!fromDate || c.start >= fromDate) && (!toDate || c.start <= toDate) ) {
-            transactions.push({
-              date: c.start,
-              type: 'expense',
-              amount: c.brokerAmount,
-              description: `عمولة سمسار للوحدة ${unitCode(c.unitId)}`
-            });
-        }
-      }
-    });
-
-    const recentTransactions = transactions
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      .slice(0, 5);
+    const recentTransactions = transactions.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
 
     const headers = ['التاريخ', 'البيان', 'المبلغ'];
     const rows = recentTransactions.map(t => {
-      const amountStyle = t.type === 'payment' ? 'color:var(--ok)' : 'color:var(--warn)';
-      const amountPrefix = t.type === 'payment' ? '+' : '-';
+      const amountStyle = t.type === 'receipt' ? 'color:var(--ok)' : 'color:var(--warn)';
+      const amountPrefix = t.type === 'receipt' ? '+' : '-';
       return [
         t.date,
         t.description,
@@ -1882,13 +1914,16 @@ function showAddExpenseModal() {
 
 function renderVouchers() {
   let activeTab = 'all';
+  const safeFilterId = currentParam?.safeId;
+  const safeFilterName = safeFilterId ? (state.safes.find(s => s.id === safeFilterId) || {}).name : null;
+  const title = safeFilterName ? `سجل حركات خزنة: ${safeFilterName}` : 'سجل السندات';
 
   view.innerHTML = `
     <div class="card">
       <div class="header">
-        <h3>سجل السندات</h3>
+        <h3>${title}</h3>
         <div class="tools">
-            <button class="btn" id="add-expense-btn">إضافة سند صرف</button>
+            ${safeFilterId ? `<button class="btn secondary" onclick="nav('treasury')">⬅️ العودة للخزينة</button>` : `<button class="btn" id="add-expense-btn">إضافة سند صرف</button>`}
         </div>
       </div>
       <div class="tabs" style="margin: 12px 0;">
@@ -1917,6 +1952,9 @@ function renderVouchers() {
 
     let list = state.vouchers.slice();
 
+    if (safeFilterId) {
+        list = list.filter(v => v.safeId === safeFilterId);
+    }
     if (activeTab !== 'all') {
       list = list.filter(v => v.type === activeTab);
     }
@@ -2166,7 +2204,7 @@ function renderTreasury() {
         }
 
         const rows = safesList.map(s => [
-            `<a href="#" onclick="alert('Feature to view transactions per safe is coming soon!'); return false;">${s.name || ''}</a>`,
+            `<a href="#" onclick="nav('vouchers', { safeId: '${s.id}' }); return false;">${s.name || ''}</a>`,
             `<span>${egp(s.balance || 0)}</span>`,
         ]);
         document.getElementById('safes-list').innerHTML = table(['اسم الخزنة', 'الرصيد الحالي'], rows);
