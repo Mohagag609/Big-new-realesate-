@@ -969,27 +969,17 @@ function deleteUnit(unitId) {
 /* ===== الوحدات ===== */
 function calcRemaining(u){
   const ct = state.contracts.find(c => c.unitId === u.id);
-  if (!ct) {
-    return 0; // No contract, so nothing is remaining
-  }
+  if (!ct) return 0;
 
-  const totalPrice = Number(ct.totalPrice || 0);
-  const discount = Number(ct.discountAmount || 0);
-  const maintenance = Number(ct.maintenanceAmount || 0);
+  const totalOwed = (ct.totalPrice || 0) - (ct.discountAmount || 0);
 
-  const totalOwed = (totalPrice - discount) + maintenance;
+  const installmentIds = new Set(state.installments.filter(i => i.unitId === u.id).map(i => i.id));
 
-  // The down payment is made at contract signing and is not part of the payments array.
-  // All other payments are in the payments array.
-  const downPayment = Number(ct.downPayment || 0);
-  const otherPayments = state.payments
-      .filter(p => p.unitId === u.id)
-      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-
-  const totalPaid = downPayment + otherPayments;
+  const totalPaid = state.vouchers
+      .filter(v => v.type === 'receipt' && (v.linked_ref === ct.id || installmentIds.has(v.linked_ref)))
+      .reduce((sum, v) => sum + v.amount, 0);
 
   const remaining = totalOwed - totalPaid;
-
   return Math.max(0, remaining);
 }
 function renderUnits(){
@@ -1574,11 +1564,15 @@ function renderContracts(){
 
     // Generate installments
     if (paymentType === 'installment') {
-        const totalAfterDown = total - discount - down;
+        const installmentBase = total - (ct.maintenanceDeposit || 0);
+        const totalAfterDown = installmentBase - discount - down;
         const totalAnnualPayments = extra * annualBonusValue;
 
+        if (totalAfterDown < 0) {
+            return alert('خطأ: المقدم والخصم أكبر من قيمة العقد الخاضعة للتقسيط.');
+        }
         if (totalAnnualPayments > totalAfterDown) {
-            return alert('خطأ: مجموع الدفعات السنوية أكبر من المبلغ المتبقي على الوحدة.');
+            return alert('خطأ: مجموع الدفعات السنوية أكبر من المبلغ المتبقي للتقسيط.');
         }
 
         const amountForRegularInstallments = totalAfterDown - totalAnnualPayments;
@@ -1610,7 +1604,9 @@ function renderContracts(){
             const lastInstallment = allInstallments.sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''))[0];
             const lastDate = new Date(lastInstallment ? lastInstallment.dueDate : startStr);
 
-            lastDate.setMonth(lastDate.getMonth() + months);
+            // Set maintenance due date one period after the last installment
+            const lastPeriodMonths = lastInstallment ? months : 0; // if no other installments, base it on contract start
+            lastDate.setMonth(lastDate.getMonth() + lastPeriodMonths);
 
             state.installments.push({
                 id: uid('I'),
@@ -3479,9 +3475,8 @@ window.openContractDetails = function(id) {
                         <tr><th>الوحدة</th><td>${unitCode(ct.unitId)} (${unit?.name || '—'})</td></tr>
                         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
                         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount || 0)}</td></tr>
-                        <tr><th>رسوم الصيانة</th><td>${egp(ct.maintenanceAmount || 0)}</td></tr>
-                        <tr><th>المبلغ بعد التعديل</th><td style="font-weight:bold">${egp((ct.totalPrice - (ct.discountAmount||0)) + (ct.maintenanceAmount||0))}</td></tr>
                         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
+                        <tr><th>وديعة الصيانة</th><td>${egp(ct.maintenanceDeposit || 0)}</td></tr>
                         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + ${ct.extraAnnual} سنوية</td></tr>
                         <tr><th>تاريخ البدء</th><td>${ct.start}</td></tr>
                     </table>
