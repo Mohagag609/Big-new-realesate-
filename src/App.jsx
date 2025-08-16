@@ -1,35 +1,39 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import React from 'react';
+import { Routes, Route } from 'react-router-dom';
+import Sidebar from './Sidebar';
+import './App.css';
+
+// A simple welcome component for the root path
+const Welcome = () => (
+  <div className="card">
+    <h1>أهلاً بك في مدير الاستثمار العقاري</h1>
+    <p>استخدم القائمة على اليمين للتنقل بين الشاشات المختلفة.</p>
+    <p>لقد تم بناء هذا الهيكل الأساسي للتطبيق. الخطوة التالية هي إضافة الوظائف لكل شاشة.</p>
+  </div>
+);
+
+// A simple 404 component
+const NotFound = () => (
+    <div className="card">
+        <h1>404 - الصفحة غير موجودة</h1>
+        <p>عفواً، لم نتمكن من العثور على الصفحة التي تبحث عنها.</p>
+    </div>
+);
+
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <div className="app-layout">
+      <Sidebar />
+      <main className="content">
+        <Routes>
+          <Route path="/" element={<Welcome />} />
+          {/* The other routes will be added here in the next steps */}
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </main>
+    </div>
+  );
 }
 
-export default App
+export default App;
