@@ -133,13 +133,15 @@ function load(){
     }
 
 
+    s.brokerDues = s.brokerDues || [];
+
     return {
-      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [],
+      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [],
       settings:{theme:'dark',font:16},locked:false,
       ...s
     };
   }catch{
-    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [],
+    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [],
       settings:{theme:'dark',font:16},locked:false};
   }
 }
@@ -189,6 +191,7 @@ const routes=[
   {id:'vouchers',title:'السندات',render:renderVouchers, tab: true},
   {id:'partners',title:'الشركاء',render:renderPartners, tab: true},
   {id:'treasury',title:'الخزينة',render:renderTreasury, tab: true},
+  {id:'brokerDues',title:'عمولات مستحقة',render:renderBrokerDues, tab: true},
   {id:'reports',title:'التقارير',render:renderReports, tab: true},
   {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: false}, // Merged into Partners screen
   {id:'audit', title: 'سجل التغييرات', render: renderAuditLog, tab: true},
@@ -1389,15 +1392,9 @@ function renderContracts(){
     const brokerP = parseNumber(document.getElementById('ct-brokerp').value);
     const brokerAmt = Math.round((total * brokerP / 100) * 100) / 100;
     const mainSafeId = document.getElementById('ct-main-safe').value;
-    const commissionSafeId = mainSafeId; // Commission is paid from the same safe
     const downPaymentSafeId = mainSafeId;
 
-    if ((down > 0 || brokerAmt > 0) && !mainSafeId) return alert('الرجاء تحديد خزنة العقد.');
-
-    const commissionSafe = state.safes.find(s => s.id === commissionSafeId);
-    if (brokerAmt > 0 && commissionSafe && commissionSafe.balance < brokerAmt) {
-      return alert(`رصيد خزنة العمولة "${commissionSafe.name}" غير كافٍ. الرصيد الحالي: ${egp(commissionSafe.balance)}`);
-    }
+    if (down > 0 && !mainSafeId) return alert('الرجاء تحديد خزنة العقد لدفع المقدم.');
 
     saveState();
     const unitId=document.getElementById('ct-unit').value, customerId=document.getElementById('ct-cust').value;
@@ -1430,9 +1427,18 @@ function renderContracts(){
         logAction('إنشاء سند قبض للمقدم', { contractId: ct.id, amount: down, safeId: downPaymentSafeId });
     }
     if (brokerAmt > 0) {
-        commissionSafe.balance -= brokerAmt;
-        state.vouchers.push({id:uid('V'), type:'payment', date:startStr, amount:brokerAmt, safeId:commissionSafeId, description:`عمولة سمسار للوحدة ${getUnitDisplayName(unitById(unitId))}`, beneficiary:brokerName || 'سمسار', linked_ref:ct.id});
-        logAction('إنشاء سند صرف للعمولة', { contractId: ct.id, amount: brokerAmt, safeId: commissionSafeId });
+        const newBrokerDue = {
+            id: uid('BD'),
+            contractId: ct.id,
+            brokerName: brokerName || 'سمسار غير محدد',
+            amount: brokerAmt,
+            dueDate: startStr,
+            status: 'due',
+            paymentDate: null,
+            paidFromSafeId: null
+        };
+        state.brokerDues.push(newBrokerDue);
+        logAction('إنشاء عمولة مستحقة للسمسار', { brokerDueId: newBrokerDue.id, contractId: ct.id, amount: brokerAmt });
     }
 
     // Generate installments
@@ -1576,6 +1582,74 @@ function renderBrokerLedger(brokerName) {
 }
 
 /* ===== الأقساط — إضافة عمود المسدد + منع التكرار في المدفوعات ===== */
+
+function renderBrokerDues() {
+    let currentList = [];
+
+    function draw() {
+        const q = (document.getElementById('bd-q')?.value || '').trim().toLowerCase();
+        let list = state.brokerDues.slice();
+        if (q) {
+            list = list.filter(d =>
+                (d.brokerName || '').toLowerCase().includes(q) ||
+                (d.status || '').toLowerCase().includes(q)
+            );
+        }
+
+        list.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+        currentList = list;
+
+        const headers = ['السمسار', 'المبلغ', 'الوحدة', 'العقد', 'تاريخ الاستحقاق', 'الحالة', ''];
+        const rows = currentList.map(d => {
+            const contract = state.contracts.find(c => c.id === d.contractId);
+            const unit = contract ? unitById(contract.unitId) : null;
+            const payButton = d.status !== 'paid' ? `<button class="btn ok" onclick="payBrokerDue('${d.id}')">دفع</button>` : 'مدفوعة';
+            return [
+                d.brokerName,
+                egp(d.amount),
+                unit ? getUnitDisplayName(unit) : '—',
+                contract ? contract.code : '—',
+                d.dueDate,
+                d.status === 'paid' ? `<span class="ok">مدفوعة</span>` : `<span class="warn">مستحقة</span>`,
+                payButton
+            ];
+        });
+
+        document.getElementById('bd-list').innerHTML = table(headers, rows);
+    }
+
+    view.innerHTML = `
+    <div class="card">
+      <h3>العمولات المستحقة للدفع</h3>
+      <div class="tools">
+        <input class="input" id="bd-q" placeholder="بحث بالسمسار أو الحالة..." oninput="draw()" style="flex:1;">
+        <button class="btn secondary" onclick="expBrokerDues()">تصدير CSV</button>
+      </div>
+      <div id="bd-list" style="margin-top:12px;"></div>
+    </div>
+  `;
+
+    window.expBrokerDues = () => {
+        const headers = ['السمسار', 'المبلغ', 'الوحدة', 'العقد', 'تاريخ الاستحقاق', 'الحالة', 'تاريخ الدفع'];
+        const rows = currentList.map(d => {
+            const contract = state.contracts.find(c => c.id === d.contractId);
+            const unit = contract ? unitById(contract.unitId) : null;
+            return [
+                d.brokerName,
+                d.amount,
+                unit ? getUnitDisplayName(unit) : '',
+                contract ? contract.code : '',
+                d.dueDate,
+                d.status,
+                d.paymentDate || ''
+            ];
+        });
+        exportCSV(headers, rows, 'broker_dues.csv');
+    };
+
+    draw();
+}
+
 function renderInstallments(){
   let sort = { idx: 5, dir: 'asc' };
   let currentList = [];
@@ -1877,6 +1951,67 @@ function processPayment(unitId, amount, method, date, safeId, installmentId = nu
     return true; // Success
 }
 
+window.payBrokerDue = function(dueId) {
+    const due = state.brokerDues.find(d => d.id === dueId);
+    if (!due || due.status === 'paid') {
+        return alert('هذه العمولة غير صالحة للدفع.');
+    }
+
+    const safeOptions = state.safes.map(s => `<option value="${s.id}">${s.name} (${egp(s.balance)})</option>`).join('');
+    const content = `
+        <p>سيتم دفع مبلغ <strong>${egp(due.amount)}</strong> للسمسار <strong>${due.brokerName}</strong>.</p>
+        <p>الرجاء اختيار الخزنة التي سيتم الدفع منها:</p>
+        <select class="select" id="due-pay-safe" style="margin-top: 10px;">
+            <option value="">اختر الخزنة...</option>
+            ${safeOptions}
+        </select>
+    `;
+
+    showModal('دفع عمولة سمسار', content, () => {
+        const safeId = document.getElementById('due-pay-safe').value;
+        if (!safeId) {
+            alert('الرجاء اختيار خزنة.');
+            return false;
+        }
+
+        const safe = state.safes.find(s => s.id === safeId);
+        if (!safe || safe.balance < due.amount) {
+            alert(`رصيد الخزنة "${safe.name}" غير كافٍ.`);
+            return false;
+        }
+
+        saveState();
+
+        // 1. Update safe balance
+        safe.balance -= due.amount;
+
+        // 2. Update due status
+        due.status = 'paid';
+        due.paymentDate = today();
+        due.paidFromSafeId = safeId;
+
+        // 3. Create payment voucher
+        const contract = state.contracts.find(c => c.id === due.contractId);
+        const unit = contract ? unitById(contract.unitId) : null;
+        const newVoucher = {
+            id: uid('V'),
+            type: 'payment',
+            date: today(),
+            amount: due.amount,
+            safeId: safeId,
+            description: `صرف عمولة سمسار للوحدة ${unit ? getUnitDisplayName(unit) : ''}`,
+            beneficiary: due.brokerName,
+            linked_ref: due.id
+        };
+        state.vouchers.push(newVoucher);
+
+        logAction('دفع عمولة سمسar مستحقة', { brokerDueId: due.id, safeId: safeId, amount: due.amount });
+
+        persist();
+        nav('brokerDues'); // Refresh the view
+        return true;
+    });
+};
 
 /* ===== الشركاء + ربطهم بالوحدات ===== */
 function showAddExpenseModal() {
