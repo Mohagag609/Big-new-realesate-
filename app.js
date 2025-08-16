@@ -218,6 +218,7 @@ const routes=[
   {id:'unit-details', title:'تفاصيل الوحدة', render:renderUnitDetails, tab: false},
   {id: 'broker-details', title: 'تفاصيل السمسار', render: renderBrokerDetails, tab: false},
   {id: 'partner-details', title: 'تفاصيل الشريك', render: renderPartnerDetails, tab: false},
+  {id: 'customer-details', title: 'تفاصيل العميل', render: renderCustomerDetails, tab: false},
 ];
 const tabs=document.getElementById('tabs'), view=document.getElementById('view');
 routes.forEach(r=>{ if(r.tab){const b=document.createElement('button'); b.className='tab'; b.id='tab-'+r.id; b.textContent=r.title; b.onclick=()=>nav(r.id); tabs.appendChild(b);} });
@@ -757,20 +758,18 @@ function renderCustomers(){
       });
     }
     list.sort((a,b)=>{
-      const colsA=[a.name||'', a.phone||'', a.nationalId||'', a.address||'', a.status||''];
-      const colsB=[b.name||'', b.phone||'', b.nationalId||'', b.address||'', b.status||''];
+      const colsA=[a.name||'', a.phone||'', a.nationalId||'', a.status||''];
+      const colsB=[b.name||'', b.phone||'', b.nationalId||'', b.status||''];
       return (colsA[sort.idx]+'').localeCompare(colsB[sort.idx]+'')*(sort.dir==='asc'?1:-1);
     });
     const rows=list.map(c=>[
-      `<span contenteditable="true" onblur="inlineUpd('customers','${c.id}','name',this.textContent)">${c.name||''}</span>`,
-      `<span contenteditable="true" onblur="inlineUpd('customers','${c.id}','phone',this.textContent)">${c.phone||''}</span>`,
-      `<span contenteditable="true" onblur="inlineUpd('customers','${c.id}','nationalId',this.textContent)">${c.nationalId||''}</span>`,
-      `<span contenteditable="true" onblur="inlineUpd('customers','${c.id}','address',this.textContent)">${c.address||''}</span>`,
-      `<span contenteditable="true" onblur="inlineUpd('customers','${c.id}','status',this.textContent)">${c.status||'نشط'}</span>`,
-      `<span contenteditable="true" onblur="inlineUpd('customers','${c.id}','notes',this.textContent)">${c.notes||''}</span>`,
+      `<a href="#" onclick="nav('customer-details', '${c.id}'); return false;">${c.name||''}</a>`,
+      c.phone||'',
+      c.nationalId||'',
+      c.status||'نشط',
       `<button class="btn secondary" onclick="delRow('customers','${c.id}')">حذف</button>`
     ]);
-    document.getElementById('c-list').innerHTML=table(['الاسم','الهاتف','الرقم القومي','العنوان','الحالة','ملاحظات',''], rows, sort, ns=>{sort=ns;draw();});
+    document.getElementById('c-list').innerHTML=table(['الاسم','الهاتف','الرقم القومي','الحالة',''], rows, sort, ns=>{sort=ns;draw();});
   }
 
   view.innerHTML=`
@@ -856,6 +855,70 @@ function renderCustomers(){
   };
 
   draw();
+}
+
+function renderCustomerDetails(customerId) {
+    const customer = custById(customerId);
+    if (!customer) {
+        view.innerHTML = `<div class="card"><p>لم يتم العثور على العميل.</p></div>`;
+        return;
+    }
+
+    const customerContracts = state.contracts.filter(c => c.customerId === customerId);
+    let totalPaid = 0;
+    let totalDebt = 0;
+    let totalValue = 0;
+
+    customerContracts.forEach(c => {
+        const unit = unitById(c.unitId);
+        if (!unit) return;
+
+        const remaining = calcRemaining(unit);
+        const value = c.totalPrice || 0;
+        const paid = value - remaining;
+
+        totalValue += value;
+        totalPaid += paid;
+        totalDebt += remaining;
+    });
+
+    const kpiHTML = `
+        <div class="card"><h4>إجمالي قيمة العقود</h4><div class="big">${egp(totalValue)}</div></div>
+        <div class="card"><h4>إجمالي المدفوع</h4><div class="big" style="color:var(--ok);">${egp(totalPaid)}</div></div>
+        <div class="card"><h4>إجمالي المديونية</h4><div class="big" style="color:var(--warn);">${egp(totalDebt)}</div></div>
+    `;
+
+    const contractRows = customerContracts.map(c => [
+        c.code,
+        unitCode(c.unitId),
+        egp(c.totalPrice),
+        `<button class="btn" onclick="openContractDetails('${c.id}')">عرض التفاصيل</button>`
+    ]);
+
+    view.innerHTML = `
+        <div class="card">
+            <div class="header" style="justify-content: space-between;">
+                <h3>تفاصيل العميل: ${customer.name}</h3>
+                <button class="btn secondary" onclick="nav('customers')">⬅️ العودة للعملاء</button>
+            </div>
+            <div class="grid grid-3" style="margin-top:16px;">
+                <p><strong>الهاتف:</strong> <span contenteditable="true" onblur="inlineUpd('customers','${customer.id}','phone',this.textContent)">${customer.phone || ''}</span></p>
+                <p><strong>الرقم القومي:</strong> <span contenteditable="true" onblur="inlineUpd('customers','${customer.id}','nationalId',this.textContent)">${customer.nationalId || ''}</span></p>
+                <p><strong>الحالة:</strong> <span contenteditable="true" onblur="inlineUpd('customers','${customer.id}','status',this.textContent)">${customer.status || ''}</span></p>
+                <p style="grid-column: span 3;"><strong>العنوان:</strong> <span contenteditable="true" onblur="inlineUpd('customers','${customer.id}','address',this.textContent)">${customer.address || ''}</span></p>
+                <p style="grid-column: span 3;"><strong>ملاحظات:</strong> <span contenteditable="true" onblur="inlineUpd('customers','${customer.id}','notes',this.textContent)">${customer.notes || ''}</span></p>
+            </div>
+        </div>
+
+        <div class="grid grid-3" style="margin-top:16px;">
+            ${kpiHTML}
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+            <h4>عقود العميل</h4>
+            ${table(['كود العقد', 'الوحدة', 'السعر', ''], contractRows)}
+        </div>
+    `;
 }
 window.inlineUpd=(coll,id,key,val)=>{
   saveState();
@@ -1550,20 +1613,18 @@ function renderContracts(){
   };
 
   window.printContracts=()=>{
-    const headers = ['الكود','الوحدة','العميل','السعر','المقدم','عمولة','نوع','عدد','بداية'];
-    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
+    const headers = ['الكود','الوحدة','العميل','السعر','المقدم','نوع','عدد','بداية'];
+    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
     printHTML('تقرير العقود', `<h1>تقرير العقود</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
 
   window.printContract=(ct)=>{
-    const brokerInfo = ct.brokerAmount > 0 ? `<tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount)} (${ct.brokerPercent}%) - ${ct.brokerName||'غير محدد'}</td></tr>` : '';
     const html=`<h1>عقد بيع — ${ct.code}</h1>
       <p>الوحدة: ${unitCode(ct.unitId)} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
       <table>
         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount||0)}</td></tr>
         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
-        ${brokerInfo}
         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + سنوية إضافية: ${ct.extraAnnual}</td></tr>
         <tr><th>بداية العقد</th><td>${ct.start}</td></tr>
       </table>`;
@@ -3386,8 +3447,6 @@ window.openContractDetails = function(id) {
                         <tr><th>رسوم الصيانة</th><td>${egp(ct.maintenanceAmount || 0)}</td></tr>
                         <tr><th>المبلغ بعد التعديل</th><td style="font-weight:bold">${egp((ct.totalPrice - (ct.discountAmount||0)) + (ct.maintenanceAmount||0))}</td></tr>
                         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
-                        <tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount || 0)} (${ct.brokerPercent || 0}%)</td></tr>
-                        <tr><th>حالة العمولة</th><td>${commissionStatus}</td></tr>
                         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + ${ct.extraAnnual} سنوية</td></tr>
                         <tr><th>تاريخ البدء</th><td>${ct.start}</td></tr>
                     </table>
