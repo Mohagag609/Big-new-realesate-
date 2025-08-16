@@ -62,6 +62,7 @@ function load(){
       s.units.forEach(u => {
         u.area = u.area || '';
         u.notes = u.notes || '';
+        u.type = u.type || 'سكني'; // Add unit type, default to residential
         // Revert from plans array to single totalPrice
         if (u.plans && u.plans.length > 0) {
             u.totalPrice = u.plans[0].price;
@@ -281,6 +282,19 @@ function unitById(id){ return state.units.find(u=>u.id===id); }
 function custById(id){ return state.customers.find(c=>c.id===id); }
 function partnerById(id){ return state.partners.find(p=>p.id===id); }
 function unitCode(id){ return (unitById(id)||{}).code||'—'; }
+function getUnitDisplayName(unit) {
+    if (!unit) return '—';
+    const parts = [];
+    if (unit.name) parts.push(unit.name);
+    else parts.push(unit.code);
+
+    const details = [];
+    if (unit.building) details.push(`عمارة: ${unit.building}`);
+    if (unit.floor) details.push(`دور: ${unit.floor}`);
+    if (details.length > 0) parts.push(`(${details.join(' - ')})`);
+
+    return parts.join(' ');
+}
 
 
 function renderPartnerDetails(partnerId) {
@@ -300,7 +314,7 @@ function renderPartnerDetails(partnerId) {
     `;
 
     const unitsRows = ownedUnits.map(up => [
-        unitCode(up.unitId),
+        getUnitDisplayName(unitById(up.unitId)),
         `${up.percent} %`
     ]);
 
@@ -466,7 +480,7 @@ function exportDashboardExcel() {
     if (fromDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate >= fromDate);
     if (toDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate <= toDate);
     const installmentData = upcomingInstallments.map(i => ({
-        'الوحدة': unitCode(i.unitId),
+        'الوحدة': getUnitDisplayName(unitById(i.unitId)),
         'العميل': (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name,
         'المبلغ': i.amount,
         'تاريخ الاستحقاق': i.dueDate
@@ -595,7 +609,7 @@ function renderDash() {
       const contract = state.contracts.find(c => c.unitId === i.unitId);
       const customer = contract ? custById(contract.customerId) : null;
       return [
-        unitCode(i.unitId),
+        getUnitDisplayName(unitById(i.unitId)),
         customer ? customer.name : '—',
         egp(i.amount),
         i.dueDate
@@ -907,13 +921,13 @@ function renderUnits(){
     let list=state.units.slice();
     if(q) {
       list=list.filter(u=> {
-        const searchable = `${u.code||''} ${u.name||''} ${u.floor||''} ${u.building||''} ${u.status||''} ${u.area||''}`.toLowerCase();
+        const searchable = `${u.code||''} ${u.name||''} ${u.floor||''} ${u.building||''} ${u.status||''} ${u.area||''} ${u.type||''}`.toLowerCase();
         return searchable.includes(q);
       });
     }
     list.sort((a,b)=>{
-      const colsA=[a.code||'', a.name||'', String(a.totalPrice || 0), a.area||'', a.floor||'', a.building||'', a.status||''];
-      const colsB=[b.code||'', b.name||'', String(b.totalPrice || 0), b.area||'', b.floor||'', b.building||'', b.status||''];
+      const colsA=[a.code||'', a.name||'', String(a.totalPrice || 0), a.area||'', a.floor||'', a.building||'', a.status||'', a.type||''];
+      const colsB=[b.code||'', b.name||'', String(b.totalPrice || 0), b.area||'', b.floor||'', b.building||'', b.status||'', b.type||''];
       return (colsA[sort.idx]+'').localeCompare(colsB[sort.idx]+'')*(sort.dir==='asc'?1:-1);
     });
     const rows=list.map(u=> {
@@ -925,6 +939,7 @@ function renderUnits(){
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','code',this.textContent)">${u.code||''}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','name',this.textContent)">${u.name||''}</span>`,
         `<span contenteditable="true" onblur="numEdit('units','${u.id}','totalPrice', this)">${egp(u.totalPrice)}</span>`,
+        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','type',this.textContent)">${u.type||'سكني'}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','area',this.textContent)">${u.area||''}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','floor',this.textContent)">${u.floor||''}</span>`,
         `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','building',this.textContent)">${u.building||''}</span>`,
@@ -936,7 +951,7 @@ function renderUnits(){
       ];
     });
     document.getElementById('u-list').innerHTML=
-      table(['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','المتبقي','الحالة','ملاحظات','إجراءات',''], rows, sort, ns=>{sort=ns;draw();});
+      table(['الكود','اسم الوحدة','السعر','النوع','المساحة','الدور','البرج','المتبقي','الحالة','ملاحظات','إجراءات',''], rows, sort, ns=>{sort=ns;draw();});
   }
 
   view.innerHTML=`
@@ -947,6 +962,7 @@ function renderUnits(){
         <input class="input" id="u-code" placeholder="كود/اسم مختصر">
         <input class="input" id="u-name" placeholder="اسم الوحدة">
         <input class="input" id="u-total-price" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <select class="select" id="u-type"><option value="سكني">سكني</option><option value="تجاري">تجاري</option></select>
         <input class="input" id="u-area" placeholder="المساحة (م²)">
         <input class="input" id="u-floor" placeholder="رقم الدور">
         <input class="input" id="u-building" placeholder="البرج/العمارة">
@@ -971,6 +987,7 @@ function renderUnits(){
     let code=document.getElementById('u-code').value.trim();
     const name=document.getElementById('u-name').value.trim();
     const status=document.getElementById('u-status').value;
+    const type=document.getElementById('u-type').value;
     const area=document.getElementById('u-area').value.trim();
     const floor=document.getElementById('u-floor').value.trim();
     const building=document.getElementById('u-building').value.trim();
@@ -994,7 +1011,7 @@ function renderUnits(){
     }
     saveState();
     const newUnit = {
-      id:uid('U'), code, name, status, area, floor, building, notes, totalPrice
+      id:uid('U'), code, name, status, type, area, floor, building, notes, totalPrice
     };
     logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code });
     state.units.push(newUnit);
@@ -1003,9 +1020,9 @@ function renderUnits(){
   };
 
   window.expUnits=()=>{
-    const headers=['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','الحالة','المتبقي','ملاحظات'];
+    const headers=['الكود','اسم الوحدة','السعر','النوع','المساحة','الدور','البرج','الحالة','المتبقي','ملاحظات'];
     const rows=state.units.map(u=> {
-      return [u.code,u.name||'',u.totalPrice,u.area||'',u.floor||'',u.building||'',u.status,calcRemaining(u),u.notes||''];
+      return [u.code,u.name||'',u.totalPrice,u.type||'سكني',u.area||'',u.floor||'',u.building||'',u.status,calcRemaining(u),u.notes||''];
     });
     exportCSV(headers, rows, 'units.csv');
   };
@@ -1017,8 +1034,8 @@ function renderUnits(){
       saveState();
       const lines=String(r.result).split(/\r?\n/).slice(1);
       lines.forEach(line=>{
-        const [code,name,total,area,floor,building,status,notes]=line.split(',').map(x=>x?.replace(/^"|"$/g,'')||'');
-        if(code) state.units.push({id:uid('U'),code,name,totalPrice:parseNumber(total),status:status||'متاحة',area,floor,building,notes});
+        const [code,name,total,type,area,floor,building,status,notes]=line.split(',').map(x=>x?.replace(/^"|"$/g,'')||'');
+        if(code) state.units.push({id:uid('U'),code,name,totalPrice:parseNumber(total),type:type||'سكني',status:status||'متاحة',area,floor,building,notes});
       });
       persist(); draw();
     };
@@ -1026,8 +1043,8 @@ function renderUnits(){
   };
 
   window.printUnits=()=>{
-    const headers=['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','الحالة','المتبقي'];
-    const rows=state.units.map(u=>`<tr><td>${u.code}</td><td>${u.name||''}</td><td>${egp(u.totalPrice)}</td><td>${u.area||''}</td><td>${u.floor||''}</td><td>${u.building||''}</td><td>${u.status}</td><td>${egp(calcRemaining(u))}</td></tr>`).join('');
+    const headers=['الكود','اسم الوحدة','السعر','النوع','المساحة','الدور','البرج','الحالة','المتبقي'];
+    const rows=state.units.map(u=>`<tr><td>${u.code}</td><td>${u.name||''}</td><td>${egp(u.totalPrice)}</td><td>${u.type||'سكني'}</td><td>${u.area||''}</td><td>${u.floor||''}</td><td>${u.building||''}</td><td>${u.status}</td><td>${egp(calcRemaining(u))}</td></tr>`).join('');
     printHTML('تقرير الوحدات', `<h1>تقرير الوحدات</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
   draw();
@@ -1299,7 +1316,7 @@ function renderContracts(){
     if (q) {
         list = list.filter(c => {
             const customerName = (custById(c.customerId) || {}).name || '';
-            const unitName = unitCode(c.unitId);
+            const unitName = getUnitDisplayName(unitById(c.unitId));
             const searchable = `${c.code || ''} ${unitName} ${customerName} ${c.brokerName || ''}`.toLowerCase();
             return searchable.includes(q);
         });
@@ -1307,7 +1324,7 @@ function renderContracts(){
 
     const rows=list.map(c=>[
         c.code,
-        unitCode(c.unitId),
+        getUnitDisplayName(unitById(c.unitId)),
         (custById(c.customerId)||{}).name||'—',
         c.brokerName ? `<a href="#" onclick="nav('broker-ledger', '${c.brokerName}'); return false;">${c.brokerName}</a>` : '—',
         egp(c.totalPrice),
@@ -1322,19 +1339,20 @@ function renderContracts(){
     <div class="card">
       <h3>إضافة عقد</h3>
       <div class="grid grid-4">
-        <select class="select" id="ct-unit"><option value="">اختر الوحدة...</option>${state.units.filter(u=>u.status==='متاحة' || u.status ==='محجوزة').map(u=>`<option value="${u.id}">${u.code}</option>`).join('')}</select>
+        <select class="select" id="ct-unit"><option value="">اختر الوحدة...</option>${state.units.filter(u=>u.status==='متاحة' || u.status ==='محجوزة').map(u=>`<option value="${u.id}">${getUnitDisplayName(u)}</option>`).join('')}</select>
         <select class="select" id="ct-cust"><option value="">اختر العميل...</option>${state.customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select>
         <input class="input" id="ct-total" placeholder="السعر الكلي" readonly style="background:var(--bg);">
         <select class="select" id="ct-payment-type">
             <option value="installment">تقسيط</option>
             <option value="cash">كاش</option>
         </select>
-        <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <select class="select" id="ct-downpayment-safe"><option value="">اختر خزنة المقدم...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
+        <div id="ct-down-wrapper">
+            <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        </div>
+        <select class="select" id="ct-main-safe"><option value="">اختر خزنة العقد...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
         <input class="input" id="ct-discount" placeholder="مبلغ الخصم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <input class="input" id="ct-broker-name" placeholder="اسم السمسار">
         <input class="input" id="ct-brokerp" placeholder="نسبة العمولة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <select class="select" id="ct-commission-safe"><option value="">اختر خزنة العمولة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
         <input class="input" id="ct-start" type="date" value="${today()}">
       </div>
       <div id="installment-options-wrapper">
@@ -1363,17 +1381,18 @@ function renderContracts(){
   </div>`;
 
   window.createContract=()=>{
-    const total=parseNumber(document.getElementById('ct-total').value), down=parseNumber(document.getElementById('ct-down').value);
+    const paymentType = document.getElementById('ct-payment-type').value;
+    const total = parseNumber(document.getElementById('ct-total').value);
+    let down = (paymentType === 'cash') ? total : parseNumber(document.getElementById('ct-down').value);
     const discount = parseNumber(document.getElementById('ct-discount').value);
     const brokerName = document.getElementById('ct-broker-name').value.trim();
-    const brokerP=parseNumber(document.getElementById('ct-brokerp').value);
-    const brokerAmt=Math.round((total*brokerP/100)*100)/100;
-    const commissionSafeId = document.getElementById('ct-commission-safe').value;
-    const downPaymentSafeId = document.getElementById('ct-downpayment-safe').value;
-    const paymentType = document.getElementById('ct-payment-type').value;
+    const brokerP = parseNumber(document.getElementById('ct-brokerp').value);
+    const brokerAmt = Math.round((total * brokerP / 100) * 100) / 100;
+    const mainSafeId = document.getElementById('ct-main-safe').value;
+    const commissionSafeId = mainSafeId; // Commission is paid from the same safe
+    const downPaymentSafeId = mainSafeId;
 
-    if (brokerAmt > 0 && !commissionSafeId) return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
-    if (down > 0 && !downPaymentSafeId) return alert('الرجاء تحديد الخزنة التي سيتم إيداع المقدم بها.');
+    if ((down > 0 || brokerAmt > 0) && !mainSafeId) return alert('الرجاء تحديد خزنة العقد.');
 
     const commissionSafe = state.safes.find(s => s.id === commissionSafeId);
     if (brokerAmt > 0 && commissionSafe && commissionSafe.balance < brokerAmt) {
@@ -1407,12 +1426,12 @@ function renderContracts(){
     if (down > 0) {
         const downPaymentSafe = state.safes.find(s => s.id === downPaymentSafeId);
         downPaymentSafe.balance += down;
-        state.vouchers.push({id:uid('V'), type:'receipt', date:startStr, amount:down, safeId:downPaymentSafeId, description:`مقدم عقد للوحدة ${unitCode(unitId)}`, payer:customer?.name, linked_ref:ct.id});
+        state.vouchers.push({id:uid('V'), type:'receipt', date:startStr, amount:down, safeId:downPaymentSafeId, description:`مقدم عقد للوحدة ${getUnitDisplayName(unitById(unitId))}`, payer:customer?.name, linked_ref:ct.id});
         logAction('إنشاء سند قبض للمقدم', { contractId: ct.id, amount: down, safeId: downPaymentSafeId });
     }
     if (brokerAmt > 0) {
         commissionSafe.balance -= brokerAmt;
-        state.vouchers.push({id:uid('V'), type:'payment', date:startStr, amount:brokerAmt, safeId:commissionSafeId, description:`عمولة سمسار للوحدة ${unitCode(unitId)}`, beneficiary:brokerName || 'سمسار', linked_ref:ct.id});
+        state.vouchers.push({id:uid('V'), type:'payment', date:startStr, amount:brokerAmt, safeId:commissionSafeId, description:`عمولة سمسار للوحدة ${getUnitDisplayName(unitById(unitId))}`, beneficiary:brokerName || 'سمسار', linked_ref:ct.id});
         logAction('إنشاء سند صرف للعمولة', { contractId: ct.id, amount: brokerAmt, safeId: commissionSafeId });
     }
 
@@ -1444,7 +1463,7 @@ function renderContracts(){
     const headers = ['كود العقد','الوحدة','العميل','السعر','المقدم','الخصم','اسم السمسار','نسبة العمولة','مبلغ العمولة'];
     const rows = state.contracts.map(c => [
         c.code,
-        unitCode(c.unitId),
+        getUnitDisplayName(unitById(c.unitId)),
         (custById(c.customerId) || {}).name || '',
         c.totalPrice,
         c.downPayment,
@@ -1458,14 +1477,14 @@ function renderContracts(){
 
   window.printContracts=()=>{
     const headers = ['الكود','الوحدة','العميل','السعر','المقدم','عمولة','نوع','عدد','بداية'];
-    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
+    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${getUnitDisplayName(unitById(c.unitId))}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
     printHTML('تقرير العقود', `<h1>تقرير العقود</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
 
   window.printContract=(ct)=>{
     const brokerInfo = ct.brokerAmount > 0 ? `<tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount)} (${ct.brokerPercent}%) - ${ct.brokerName||'غير محدد'}</td></tr>` : '';
     const html=`<h1>عقد بيع — ${ct.code}</h1>
-      <p>الوحدة: ${unitCode(ct.unitId)} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
+      <p>الوحدة: ${getUnitDisplayName(unitById(ct.unitId))} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
       <table>
         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount||0)}</td></tr>
@@ -1480,20 +1499,17 @@ function renderContracts(){
   const unitSelect = document.getElementById('ct-unit');
   const totalInput = document.getElementById('ct-total');
   const paymentTypeSelect = document.getElementById('ct-payment-type');
-  const downPaymentInput = document.getElementById('ct-down');
+  const downPaymentWrapper = document.getElementById('ct-down-wrapper');
   const installmentOptionsWrapper = document.getElementById('installment-options-wrapper');
 
   function updateFormForPaymentType() {
       const paymentType = paymentTypeSelect.value;
-      const total = parseNumber(totalInput.value);
-
       if (paymentType === 'cash') {
           installmentOptionsWrapper.style.display = 'none';
-          downPaymentInput.value = total || '';
-          downPaymentInput.readOnly = true;
+          downPaymentWrapper.style.display = 'none';
       } else { // 'installment'
           installmentOptionsWrapper.style.display = 'block';
-          downPaymentInput.readOnly = false;
+          downPaymentWrapper.style.display = 'block';
       }
       updateTotalInstallments();
   }
@@ -1537,7 +1553,7 @@ function renderBrokerLedger(brokerName) {
     const rows = brokerContracts.map(c => [
         c.start,
         c.code,
-        unitCode(c.unitId),
+        getUnitDisplayName(unitById(c.unitId)),
         egp(c.brokerAmount)
     ]);
 
@@ -1588,7 +1604,7 @@ function renderInstallments(){
     if(q){
       list = list.filter(i => {
         const customerName = (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name || '';
-        const searchable = `${unitCode(i.unitId)} ${customerName} ${i.status||''} ${i.dueDate||''}`.toLowerCase();
+        const searchable = `${getUnitDisplayName(unitById(i.unitId))} ${customerName} ${i.status||''} ${i.dueDate||''}`.toLowerCase();
         return searchable.includes(q);
       });
     }
@@ -1605,8 +1621,8 @@ function renderInstallments(){
       const partnersA = state.unitPartners.filter(up => up.unitId === a.unitId).map(up => (partnerById(up.partnerId) || {}).name).join(', ');
       const partnersB = state.unitPartners.filter(up => up.unitId === b.unitId).map(up => (partnerById(up.partnerId) || {}).name).join(', ');
 
-      const A = [unitCode(a.unitId), customerA, partnersA, a.type || '', String(originalA), String(paidA), String(a.amount), a.dueDate || '', a.paymentDate || '', a.status || ''];
-      const B = [unitCode(b.unitId), customerB, partnersB, b.type || '', String(originalB), String(paidB), String(b.amount), b.dueDate || '', b.paymentDate || '', b.status || ''];
+      const A = [getUnitDisplayName(unitById(a.unitId)), customerA, partnersA, a.type || '', String(originalA), String(paidA), String(a.amount), a.dueDate || '', a.paymentDate || '', a.status || ''];
+      const B = [getUnitDisplayName(unitById(b.unitId)), customerB, partnersB, b.type || '', String(originalB), String(paidB), String(b.amount), b.dueDate || '', b.paymentDate || '', b.status || ''];
       return (A[sort.idx] + '').localeCompare(B[sort.idx] + '') * (sort.dir === 'asc' ? 1 : -1);
     });
 
@@ -1631,7 +1647,7 @@ function renderInstallments(){
       const partners = state.unitPartners.filter(up => up.unitId === i.unitId).map(up => `${(partnerById(up.partnerId) || {}).name} (${up.percent}%)`).join(', ');
 
       return `<tr class="${rowClass}">
-        <td>${unitCode(i.unitId)}</td>
+        <td>${getUnitDisplayName(unitById(i.unitId))}</td>
         <td>${customerName}</td>
         <td>${partners || '—'}</td>
         <td>${i.type || ''}</td>
@@ -1672,7 +1688,7 @@ function renderInstallments(){
     const rows=currentList.map(i=> {
         const originalAmount = i.originalAmount ?? i.amount;
         const paidAmount = originalAmount - i.amount;
-        return [unitCode(i.unitId), i.type, originalAmount, paidAmount, i.amount, i.dueDate||'', i.paymentDate||'', i.status||''];
+        return [getUnitDisplayName(unitById(i.unitId)), i.type, originalAmount, paidAmount, i.amount, i.dueDate||'', i.paymentDate||'', i.status||''];
     });
     exportCSV(headers, rows, 'installments.csv');
   };
@@ -1682,7 +1698,7 @@ function renderInstallments(){
       const paidAmount = originalAmount - i.amount;
       return `
       <tr>
-        <td>${unitCode(i.unitId)}</td>
+        <td>${getUnitDisplayName(unitById(i.unitId))}</td>
         <td>${i.type || ''}</td>
         <td>${egp(originalAmount)}</td>
         <td>${egp(paidAmount)}</td>
@@ -1812,7 +1828,7 @@ function processPayment(unitId, amount, method, date, safeId, installmentId = nu
         date: date,
         amount: amount,
         safeId: safeId,
-        description: `سداد دفعة للوحدة ${unitCode(unitId)}`,
+        description: `سداد دفعة للوحدة ${getUnitDisplayName(unitById(unitId))}`,
         payer: customer ? customer.name : 'غير محدد',
         linked_ref: installmentId || unitId
     };
@@ -2094,7 +2110,7 @@ function renderPartners(){
       debtsList = debtsList.filter(d => {
         const paying = partnerById(d.payingPartnerId)?.name || '';
         const owed = partnerById(d.owedPartnerId)?.name || '';
-        const unit = unitCode(d.unitId) || '';
+        const unit = getUnitDisplayName(unitById(d.unitId)) || '';
         const searchable = `${paying} ${owed} ${unit} ${d.status}`.toLowerCase();
         return searchable.includes(q);
       });
@@ -2113,7 +2129,7 @@ function renderPartners(){
     const rows = debtsList.map(d => {
       const paying = partnerById(d.payingPartnerId)?.name || 'محذوف';
       const owed = partnerById(d.owedPartnerId)?.name || 'محذوف';
-      const unit = unitCode(d.unitId);
+      const unit = getUnitDisplayName(unitById(d.unitId));
       const payButton = d.status !== 'مدفوع' ? `<button class="btn ok" onclick="payPartnerDebt('${d.id}')">تسجيل السداد</button>` : 'تم السداد';
       return [paying, owed, unit, d.dueDate, egp(d.amount), d.status, payButton];
     });
@@ -2153,7 +2169,7 @@ function renderPartners(){
       const rows = debtsList.map(d => [
           partnerById(d.payingPartnerId)?.name || 'محذوف',
           partnerById(d.owedPartnerId)?.name || 'محذوف',
-          unitCode(d.unitId),
+          getUnitDisplayName(unitById(d.unitId)),
           d.dueDate,
           d.amount,
           d.status
@@ -2496,7 +2512,7 @@ function renderPartnerDebts(){
       list = list.filter(d => {
         const paying = partnerById(d.payingPartnerId)?.name || '';
         const owed = partnerById(d.owedPartnerId)?.name || '';
-        const unit = unitCode(d.unitId) || '';
+        const unit = getUnitDisplayName(unitById(d.unitId)) || '';
         const searchable = `${paying} ${owed} ${unit} ${d.status}`.toLowerCase();
         return searchable.includes(q);
       });
@@ -2505,12 +2521,12 @@ function renderPartnerDebts(){
     list.sort((a,b)=>{
       const pA = partnerById(a.payingPartnerId)?.name || '';
       const oA = partnerById(a.owedPartnerId)?.name || '';
-      const uA = unitCode(a.unitId);
+      const uA = getUnitDisplayName(unitById(a.unitId));
       const colsA = [pA, oA, uA, a.dueDate, a.amount, a.status];
 
       const pB = partnerById(b.payingPartnerId)?.name || '';
       const oB = partnerById(b.owedPartnerId)?.name || '';
-      const uB = unitCode(b.unitId);
+      const uB = getUnitDisplayName(unitById(b.unitId));
       const colsB = [pB, oB, uB, b.dueDate, b.amount, b.status];
 
       const valA = colsA[sort.idx];
@@ -2525,7 +2541,7 @@ function renderPartnerDebts(){
     const rows = list.map(d => {
       const paying = partnerById(d.payingPartnerId)?.name || 'محذوف';
       const owed = partnerById(d.owedPartnerId)?.name || 'محذوف';
-      const unit = unitCode(d.unitId);
+      const unit = getUnitDisplayName(unitById(d.unitId));
       const payButton = d.status !== 'مدفوع' ? `<button class="btn ok" onclick="payPartnerDebt('${d.id}')">تسجيل السداد</button>` : 'تم السداد';
       return [paying, owed, unit, d.dueDate, egp(d.amount), d.status, payButton];
     });
@@ -2615,7 +2631,7 @@ window.runReport=(type)=>{
       title='تقرير الأقساط المستحقة'; headers=['الوحدة','العميل','المبلغ','تاريخ الاستحقاق'];
       let inst=state.installments.filter(i=>i.status!=='مدفوع');
       if(from) inst=inst.filter(i=>i.dueDate>=from); if(to) inst=inst.filter(i=>i.dueDate<=to);
-      rows=inst.map(i=>[unitCode(i.unitId),(custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,egp(i.amount),i.dueDate]);
+      rows=inst.map(i=>[getUnitDisplayName(unitById(i.unitId)),(custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,egp(i.amount),i.dueDate]);
       break;
     case 'inst_overdue':
       title='تقرير الأقساط المتأخرة فقط';
@@ -2630,7 +2646,7 @@ window.runReport=(type)=>{
       rows = overdueInst.map(i => {
         const delay = Math.floor((todayDate - new Date(i.dueDate)) / (1000 * 60 * 60 * 24));
         return [
-          unitCode(i.unitId),
+          getUnitDisplayName(unitById(i.unitId)),
           (custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,
           egp(i.amount),
           i.dueDate,
@@ -2731,7 +2747,7 @@ window.runReport=(type)=>{
         const links = state.unitPartners.filter(up => up.unitId === contract.unitId && (!partnerIdForProfit || up.partnerId === partnerIdForProfit));
         links.forEach(l => {
           const profit = Math.round((v.amount * l.percent / 100) * 100) / 100;
-          rows.push([(partnerById(l.partnerId)||{}).name||'—', unitCode(contract.unitId), egp(v.amount), l.percent+'%', egp(profit)]);
+          rows.push([(partnerById(l.partnerId)||{}).name||'—', getUnitDisplayName(unitById(contract.unitId)), egp(v.amount), l.percent+'%', egp(profit)]);
         });
       });
       break;
