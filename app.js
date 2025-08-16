@@ -80,8 +80,7 @@ function load(){
     // Data migration for contracts
     if (s.contracts && s.contracts.length > 0) {
       s.contracts.forEach(c => {
-        c.maintenancePercent = c.maintenancePercent || 0;
-        c.maintenanceAmount = c.maintenanceAmount || 0;
+        c.brokerName = c.brokerName || '';
         c.commissionSafeId = c.commissionSafeId || null;
         c.discountAmount = c.discountAmount || 0;
         c.planName = c.planName || 'السعر الافتراضي';
@@ -99,14 +98,52 @@ function load(){
     }
 
     s.auditLog = s.auditLog || [];
+    s.vouchers = s.vouchers || [];
+
+    // Migration from payments to vouchers (run once)
+    if (s.payments && s.payments.length > 0 && s.vouchers.length === 0) {
+        console.log('Migrating payments to vouchers...');
+        s.payments.forEach(p => {
+            const unit = s.units.find(u => u.id === p.unitId);
+            const contract = s.contracts.find(c => c.unitId === p.unitId);
+            const customer = contract ? s.customers.find(cust => cust.id === contract.customerId) : null;
+            s.vouchers.push({
+                id: uid('V'),
+                type: 'receipt',
+                date: p.date,
+                amount: p.amount,
+                safeId: p.safeId,
+                description: `دفعة للوحدة ${unit ? unit.code : 'غير معروفة'}`,
+                payer: customer ? customer.name : 'غير محدد',
+                linked_ref: p.unitId
+            });
+        });
+
+        s.contracts.forEach(c => {
+            if (c.brokerAmount > 0) {
+                const unit = s.units.find(u => u.id === c.unitId);
+                s.vouchers.push({
+                    id: uid('V'),
+                    type: 'payment',
+                    date: c.start,
+                    amount: c.brokerAmount,
+                    safeId: c.commissionSafeId,
+                    description: `عمولة سمسار للوحدة ${unit ? unit.code : 'غير معروفة'}`,
+                    beneficiary: c.brokerName || 'سمسار',
+                    linked_ref: c.id
+                });
+            }
+        });
+    }
+
 
     return {
-      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [],
+      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [],
       settings:{theme:'dark',font:16},locked:false,
       ...s
     };
   }catch{
-    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[],
+    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [],
       settings:{theme:'dark',font:16},locked:false};
   }
 }
@@ -153,7 +190,7 @@ const routes=[
   {id:'units',title:'الوحدات',render:renderUnits, tab: true},
   {id:'contracts',title:'العقود',render:renderContracts, tab: true},
   {id:'installments',title:'الأقساط',render:renderInstallments, tab: true},
-  {id:'payments',title:'المدفوعات',render:renderPayments, tab: true},
+  {id:'vouchers',title:'السندات',render:renderVouchers, tab: true},
   {id:'partners',title:'الشركاء',render:renderPartners, tab: true},
   {id:'treasury',title:'الخزينة',render:renderTreasury, tab: true},
   {id:'reports',title:'التقارير',render:renderReports, tab: true},
@@ -1238,8 +1275,8 @@ function editContract(contractId) {
 
 function renderContracts(){
   function draw(){
-    const rows=state.contracts.map(c=>[ c.code, unitCode(c.unitId), (custById(c.customerId)||{}).name||'—', c.planName || '—', egp(c.totalPrice), egp(c.maintenanceAmount||0), c.start, `<button class="btn" onclick="openContractDetails('${c.id}')">عرض</button> <button class="btn gold" onclick="editContract('${c.id}')">تعديل</button>`, `<button class="btn secondary" onclick="deleteContract('${c.id}')">حذف</button>` ]);
-    document.getElementById('ct-list').innerHTML=table(['كود العقد','الوحدة','العميل','خطة السعر','السعر','قيمة الصيانة','تاريخ البدء','إجراءات',''], rows);
+    const rows=state.contracts.map(c=>[ c.code, unitCode(c.unitId), (custById(c.customerId)||{}).name||'—', c.planName || '—', egp(c.totalPrice), c.start, `<button class="btn" onclick="openContractDetails('${c.id}')">عرض</button> <button class="btn gold" onclick="editContract('${c.id}')">تعديل</button>`, `<button class="btn secondary" onclick="deleteContract('${c.id}')">حذف</button>` ]);
+    document.getElementById('ct-list').innerHTML=table(['كود العقد','الوحدة','العميل','خطة السعر','السعر','تاريخ البدء','إجراءات',''], rows);
   }
   view.innerHTML=`
   <div class="grid">
@@ -1252,17 +1289,22 @@ function renderContracts(){
         <select class="select" id="ct-cust"><option value="">اختر العميل...</option>${state.customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select>
         <input class="input" id="ct-total" placeholder="السعر الكلي" readonly style="background:var(--bg);">
         <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <select class="select" id="ct-downpayment-safe"><option value="">اختر خزنة المقدم...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
         <input class="input" id="ct-discount" placeholder="مبلغ الخصم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="ct-broker-name" placeholder="اسم السمسار">
         <input class="input" id="ct-brokerp" placeholder="نسبة العمولة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <input class="input" id="ct-maintp" placeholder="نسبة الصيانة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <select class="select" id="ct-safe"><option value="">اختر خزنة العمولة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
-        <select class="select" id="ct-type"><option>شهري</option><option>ربع سنوي</option><option>نصف سنوي</option><option>سنوي</option></select>
-        <input class="input" id="ct-count" placeholder="عدد الدفعات" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
-        <input class="input" id="ct-annual-bonus" placeholder="دفعات سنوية إضافية (0-3)" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
-        <input class="input" id="ct-start" type="date" value="${today()}">
+        <select class="select" id="ct-commission-safe"><option value="">اختر خزنة العمولة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
+        <input class="input" id="ct-start" type="date" value="${today()}" style="grid-column: span 2;">
       </div>
-      <div style="color:var(--muted); font-size:12px; margin-top:4px; padding-right: 5px;">
-        إجمالي عدد الأقساط: <span id="ct-total-installments" style="font-weight:bold;">0</span>
+      <div id="installment-options-wrapper">
+        <div class="grid grid-4" style="margin-top:10px;">
+            <select class="select" id="ct-type" style="grid-column: span 2;"><option>شهري</option><option>ربع سنوي</option><option>نصف سنوي</option><option>سنوي</option></select>
+            <input class="input" id="ct-count" placeholder="عدد الدفعات" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
+            <input class="input" id="ct-annual-bonus" placeholder="دفعات سنوية إضافية (0-3)" oninput="this.value=this.value.replace(/[^\\d]/g,'')">
+        </div>
+        <div style="color:var(--muted); font-size:12px; margin-top:4px; padding-right: 5px;">
+            إجمالي عدد الأقساط: <span id="ct-total-installments" style="font-weight:bold;">0</span>
+        </div>
       </div>
       <div class="tools">
         <button class="btn" onclick="createContract()">حفظ + توليد أقساط</button>
@@ -1278,21 +1320,22 @@ function renderContracts(){
   window.createContract=()=>{
     const total=parseNumber(document.getElementById('ct-total').value), down=parseNumber(document.getElementById('ct-down').value);
     const discount = parseNumber(document.getElementById('ct-discount').value);
+    const brokerName = document.getElementById('ct-broker-name').value.trim();
     const brokerP=parseNumber(document.getElementById('ct-brokerp').value);
     const brokerAmt=Math.round((total*brokerP/100)*100)/100;
-    const commissionSafeId = document.getElementById('ct-safe').value;
+    const commissionSafeId = document.getElementById('ct-commission-safe').value;
+    const downPaymentSafeId = document.getElementById('ct-downpayment-safe').value;
     const planSelect = document.getElementById('ct-plan');
     const planName = planSelect.options[planSelect.selectedIndex]?.text;
     const planId = planSelect.value;
     const planType = planSelect.options[planSelect.selectedIndex]?.dataset.type;
 
-    if (brokerAmt > 0 && !commissionSafeId) {
-      return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
-    }
+    if (brokerAmt > 0 && !commissionSafeId) return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
+    if (down > 0 && !downPaymentSafeId) return alert('الرجاء تحديد الخزنة التي سيتم إيداع المقدم بها.');
 
-    const safe = state.safes.find(s => s.id === commissionSafeId);
-    if (brokerAmt > 0 && safe && safe.balance < brokerAmt) {
-      return alert(`رصيد خزنة العمولة "${safe.name}" غير كافٍ. الرصيد الحالي: ${egp(safe.balance)}`);
+    const commissionSafe = state.safes.find(s => s.id === commissionSafeId);
+    if (brokerAmt > 0 && commissionSafe && commissionSafe.balance < brokerAmt) {
+      return alert(`رصيد خزنة العمولة "${commissionSafe.name}" غير كافٍ. الرصيد الحالي: ${egp(commissionSafe.balance)}`);
     }
 
     saveState();
@@ -1302,35 +1345,39 @@ function renderContracts(){
     const unitPartners = state.unitPartners.filter(up => up.unitId === unitId);
     const totalPercent = unitPartners.reduce((sum, p) => sum + Number(p.percent), 0);
 
-    if (unitPartners.length === 0) {
-      return alert('لا يمكن إنشاء عقد. يجب تحديد شركاء لهذه الوحدة أولاً من خلال شاشة "إدارة الوحدة".');
-    }
-    if (totalPercent !== 100) {
-      return alert(`لا يمكن إنشاء عقد. مجموع نسب الشركاء هو ${totalPercent}% ويجب أن يكون 100% بالضبط.`);
-    }
+    if (unitPartners.length === 0) return alert('لا يمكن إنشاء عقد. يجب تحديد شركاء لهذه الوحدة أولاً.');
+    if (totalPercent !== 100) return alert(`لا يمكن إنشاء عقد. مجموع نسب الشركاء هو ${totalPercent}% ويجب أن يكون 100% بالضبط.`);
 
-    const maintP=parseNumber(document.getElementById('ct-maintp').value);
     const type=document.getElementById('ct-type').value, count=parseInt(document.getElementById('ct-count').value||'0',10);
     const extra=parseInt(document.getElementById('ct-annual-bonus').value||'0',10);
     const startStr=document.getElementById('ct-start').value||today(); const start=new Date(startStr);
 
     if(planType === 'installment' && count <= 0) return alert('عدد الدفعات غير صالح');
 
-    const maintAmt=Math.round((total*maintP/100)*100)/100;
+    // Create contract object first
+    const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
+    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, planId, planName, brokerName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
+    state.contracts.push(ct);
+    logAction('إنشاء عقد جديد', { contractId: ct.id, unitId, customerId, price: total });
 
-    if (safe && brokerAmt > 0) {
-      safe.balance -= brokerAmt;
+    // Handle financials and vouchers
+    const customer = custById(customerId);
+    if (down > 0) {
+        const downPaymentSafe = state.safes.find(s => s.id === downPaymentSafeId);
+        downPaymentSafe.balance += down;
+        state.vouchers.push({id:uid('V'), type:'receipt', date:startStr, amount:down, safeId:downPaymentSafeId, description:`مقدم عقد للوحدة ${unitCode(unitId)}`, payer:customer?.name, linked_ref:ct.id});
+        logAction('إنشاء سند قبض للمقدم', { contractId: ct.id, amount: down, safeId: downPaymentSafeId });
+    }
+    if (brokerAmt > 0) {
+        commissionSafe.balance -= brokerAmt;
+        state.vouchers.push({id:uid('V'), type:'payment', date:startStr, amount:brokerAmt, safeId:commissionSafeId, description:`عمولة سمسار للوحدة ${unitCode(unitId)}`, beneficiary:brokerName || 'سمسار', linked_ref:ct.id});
+        logAction('إنشاء سند صرف للعمولة', { contractId: ct.id, amount: brokerAmt, safeId: commissionSafeId });
     }
 
-    const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
-    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, planId, planName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, maintenancePercent: maintP, maintenanceAmount: maintAmt, type, count, extraAnnual:Math.min(Math.max(extra,0),3), start:startStr};
-    logAction('إنشاء عقد جديد', { contractId: ct.id, unitId, customerId, price: total });
-    state.contracts.push(ct);
-
-    // توليد الأقساط
+    // Generate installments
     if (planType === 'installment') {
         const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
-        const remain=Math.max(0, (total - discount - down) + maintAmt); // Installments cover remaining price + maintenance
+        const remain=Math.max(0, (total - discount - down));
         const parts=count + ct.extraAnnual;
         const base=Math.floor((remain/parts)*100)/100; let acc=0;
         for(let i=0;i<count;i++){
@@ -1352,12 +1399,13 @@ function renderContracts(){
   };
 
   window.printContracts=()=>{
-    const headers = ['الكود','الوحدة','العميل','خطة السعر','السعر','المقدم','عمولة','صيانة','نوع','عدد','بداية'];
-    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${c.planName||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${egp(c.maintenanceAmount||0)} (${c.maintenancePercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
+    const headers = ['الكود','الوحدة','العميل','خطة السعر','السعر','المقدم','عمولة','نوع','عدد','بداية'];
+    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${c.planName||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${egp(c.brokerAmount||0)} (${c.brokerPercent||0}%)</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
     printHTML('تقرير العقود', `<h1>تقرير العقود</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
 
   window.printContract=(ct)=>{
+    const brokerInfo = ct.brokerAmount > 0 ? `<tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount)} (${ct.brokerPercent}%) - ${ct.brokerName||'غير محدد'}</td></tr>` : '';
     const html=`<h1>عقد بيع — ${ct.code}</h1>
       <p>الوحدة: ${unitCode(ct.unitId)} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
       <table>
@@ -1365,8 +1413,7 @@ function renderContracts(){
         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount||0)}</td></tr>
         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
-        <tr><th>عمولة السمسار</th><td>${egp(ct.brokerAmount||0)} (${ct.brokerPercent||0}%)</td></tr>
-        <tr><th>رسوم الصيانة</th><td>${egp(ct.maintenanceAmount||0)} (${ct.maintenancePercent||0}%)</td></tr>
+        ${brokerInfo}
         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + سنوية إضافية: ${ct.extraAnnual}</td></tr>
         <tr><th>بداية العقد</th><td>${ct.start}</td></tr>
       </table>`;
@@ -1377,11 +1424,7 @@ function renderContracts(){
   const planSelect = document.getElementById('ct-plan');
   const totalInput = document.getElementById('ct-total');
   const downPaymentInput = document.getElementById('ct-down');
-  const installmentFields = [
-      document.getElementById('ct-type'),
-      document.getElementById('ct-count'),
-      document.getElementById('ct-annual-bonus')
-  ];
+  const installmentOptionsWrapper = document.getElementById('installment-options-wrapper');
 
   function updateFormForPlan() {
       const selectedOption = planSelect.options[planSelect.selectedIndex];
@@ -1392,11 +1435,11 @@ function renderContracts(){
       totalInput.value = planPrice || '';
 
       if (planType === 'cash') {
-          installmentFields.forEach(f => f.disabled = true);
+          installmentOptionsWrapper.style.display = 'none';
           downPaymentInput.value = planPrice || '';
           downPaymentInput.readOnly = true;
       } else { // installment or nothing selected
-          installmentFields.forEach(f => f.disabled = false);
+          installmentOptionsWrapper.style.display = 'block';
           downPaymentInput.readOnly = false;
       }
       updateTotalInstallments();
@@ -1682,18 +1725,20 @@ function processPayment(unitId, amount, method, date, safeId, installmentId = nu
 
     let remainingAmountToProcess = amount;
 
-    // Create the main payment record
-    const payment = {
-        id: uid('P'),
-        unitId,
-        amount, // The total amount of this transaction
-        method,
-        date,
-        safeId,
-        installmentId // Link to the initial installment if provided
+    // Create a receipt voucher for the payment
+    const customer = custById(state.contracts.find(c => c.unitId === unitId)?.customerId);
+    const voucher = {
+        id: uid('V'),
+        type: 'receipt',
+        date: date,
+        amount: amount,
+        safeId: safeId,
+        description: `سداد دفعة للوحدة ${unitCode(unitId)}`,
+        payer: customer ? customer.name : 'غير محدد',
+        linked_ref: installmentId || unitId
     };
-    logAction('تسجيل دفعة', { paymentId: payment.id, unitId, amount, safeId });
-    state.payments.push(payment);
+    state.vouchers.push(voucher);
+    logAction('تسجيل سند قبض', { voucherId: voucher.id, unitId, amount, safeId });
 
     // Add money to the safe
     safe.balance = (safe.balance || 0) + amount;
@@ -1704,8 +1749,6 @@ function processPayment(unitId, amount, method, date, safeId, installmentId = nu
         .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
 
     if (installmentsToPay.length === 0 && installmentId) {
-        // This case is weird, a payment for an installment but no payable installments found.
-        // We'll just log it and proceed with the basic payment record.
         console.warn(`Payment made for installment ${installmentId}, but no payable installments found for unit ${unitId}.`);
         return true;
     }
@@ -1739,141 +1782,127 @@ function processPayment(unitId, amount, method, date, safeId, installmentId = nu
     return true; // Success
 }
 
-/* ===== المدفوعات ===== */
-function renderPayments(){
-  const safeById = (id) => state.safes.find(s => s.id === id);
-  const safeName = (id) => (safeById(id) || {}).name || '—';
 
-  function draw(){
-    const q=(document.getElementById('p-q')?.value || '').trim().toLowerCase();
-    let list=state.payments.slice().reverse();
-    if(q) {
-      list=list.filter(p=> {
-        const searchable = `${unitCode(p.unitId)} ${p.method||''} ${p.date||''} ${safeName(p.safeId)}`.toLowerCase();
-        return searchable.includes(q);
-      });
-    }
-    const rows=list.map(p=>[
-      unitCode(p.unitId),
-      egp(p.amount),
-      p.method||'—',
-      safeName(p.safeId),
-      p.date||'—',
-      (p.installmentId?'<span class="badge info">من قسط</span>':'<span class="badge secondary">يدوي</span>'),
-      `<button class="btn" onclick='printHTML("إيصال دفع", "<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(p.unitId)}</p><p>المبلغ: ${egp(p.amount)}</p><p>الطريقة: ${p.method||"—"}</p><p>الخزنة: ${safeName(p.safeId)}</p><p>التاريخ: ${p.date||"—"}</p>")'>إيصال</button>` +
-      (p.installmentId ? '' : ` <button class="btn secondary" onclick="deletePayment('${p.id}')">حذف</button>`)
-    ]);
-    document.getElementById('p-list').innerHTML=table(['الوحدة','المبلغ','الطريقة','الخزنة','التاريخ','مصدر',''], rows);
-  }
+/* ===== الشركاء + ربطهم بالوحدات ===== */
+function showAddExpenseModal() {
+    const safeOptions = state.safes.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    const content = `
+        <div class="grid grid-2" style="gap: 10px;">
+            <input class="input" id="exp-desc" placeholder="بيان المصروف">
+            <input class="input" id="exp-beneficiary" placeholder="المستفيد">
+            <input class="input" id="exp-amount" type="number" placeholder="المبلغ">
+            <input class="input" id="exp-date" type="date" value="${today()}">
+        </div>
+        <select class="select" id="exp-safe" style="margin-top: 10px;">
+            <option value="">اختر الخزنة...</option>
+            ${safeOptions}
+        </select>
+    `;
 
-  view.innerHTML=`
-  <div class="grid grid-2">
+    showModal('إضافة سند صرف جديد', content, () => {
+        const description = document.getElementById('exp-desc').value.trim();
+        const beneficiary = document.getElementById('exp-beneficiary').value.trim();
+        const amount = parseNumber(document.getElementById('exp-amount').value);
+        const date = document.getElementById('exp-date').value;
+        const safeId = document.getElementById('exp-safe').value;
+
+        if (!description || !amount || !date || !safeId) {
+            alert('الرجاء ملء جميع الحقول.');
+            return false;
+        }
+
+        const safe = state.safes.find(s => s.id === safeId);
+        if (safe.balance < amount) {
+            alert(`رصيد الخزنة "${safe.name}" غير كافٍ.`);
+            return false;
+        }
+
+        saveState();
+
+        safe.balance -= amount;
+
+        const newVoucher = {
+            id: uid('V'),
+            type: 'payment',
+            date,
+            amount,
+            safeId,
+            description,
+            beneficiary,
+            linked_ref: 'general_expense'
+        };
+        state.vouchers.push(newVoucher);
+        logAction('إضافة سند صرف يدوي', newVoucher);
+
+        persist();
+        nav('vouchers');
+        return true;
+    });
+}
+
+function renderVouchers() {
+  let activeTab = 'all';
+
+  view.innerHTML = `
     <div class="card">
-      <h3>إضافة دفعة</h3>
-      <select class="select" id="p-safe" required><option value="">اختر الخزنة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
-      <select class="select" id="p-unit" style="margin-top:8px"><option value="">الوحدة</option>${state.units.map(u=>`<option value="${u.id}">${u.code} - ${u.name||''}</option>`).join('')}</select>
-      <input class="input" id="p-amount" placeholder="المبلغ" oninput="this.value=this.value.replace(/[^\\d.]/g,'')" style="margin-top:8px">
-      <select class="select" id="p-method" style="margin-top:8px"><option value="نقدي">نقدي</option><option value="تحويل">تحويل</option><option value="قسط">قسط</option><option value="جزئي">جزئي</option></select>
-      <div id="p-installments-container" style="display:none; margin-top: 8px;">
-        <select class="select" id="p-installments"><option value="">اختر القسط المرتبط</option></select>
+      <div class="header">
+        <h3>سجل السندات</h3>
+        <div class="tools">
+            <button class="btn" id="add-expense-btn">إضافة سند صرف</button>
+        </div>
       </div>
-      <input class="input" id="p-date" type="date" value="${today()}" style="margin-top:8px">
-      <button class="btn" onclick="addPayment()" style="margin-top:8px">حفظ + إيصال</button>
-    </div>
-    <div class="card">
-      <h3>المدفوعات</h3>
-      <div class="tools">
-        <input class="input" id="p-q" placeholder="بحث..." oninput="draw()">
-        <button class="btn secondary" onclick="expPayments()">CSV</button>
-        <button class="btn" onclick="printPayments()">طباعة PDF</button>
+      <div class="tabs" style="margin: 12px 0;">
+          <button class="tab-btn active" data-tab="all">الكل</button>
+          <button class="tab-btn" data-tab="receipt">سندات قبض</button>
+          <button class="tab-btn" data-tab="payment">سندات صرف</button>
       </div>
-      <div id="p-list"></div>
+      <div id="vouchers-list"></div>
     </div>
-  </div>`;
+  `;
 
-  function updateInstallmentSelector() {
-      const unitId = document.getElementById('p-unit').value;
-      const method = document.getElementById('p-method').value;
-      const container = document.getElementById('p-installments-container');
-      const select = document.getElementById('p-installments');
-      const amountInput = document.getElementById('p-amount');
-
-      if (unitId && (method === 'قسط' || method === 'جزئي')) {
-          const unpaid = state.installments.filter(i => i.unitId === unitId && i.status !== 'مدفوع' && i.amount > 0);
-          select.innerHTML = '<option value="">اختر القسط...</option>' + unpaid.map(i =>
-              `<option value="${i.id}" data-amount="${i.amount}">قسط ${egp(i.amount)} - مستحق في ${i.dueDate}</option>`
-          ).join('');
-          select.onchange = () => {
-            const selectedOption = select.options[select.selectedIndex];
-            if (selectedOption && selectedOption.dataset.amount) {
-              amountInput.value = selectedOption.dataset.amount;
-            }
-          };
-          container.style.display = 'block';
-      } else {
-          container.style.display = 'none';
-      }
-  }
-
-  document.getElementById('p-unit').onchange = updateInstallmentSelector;
-  document.getElementById('p-method').onchange = updateInstallmentSelector;
-
-  window.addPayment=()=>{
-    const unitId=document.getElementById('p-unit').value;
-    const amount=parseNumber(document.getElementById('p-amount').value);
-    const method=document.getElementById('p-method').value;
-    const date=document.getElementById('p-date').value||today();
-    const installmentId = document.getElementById('p-installments').value;
-    const safeId = document.getElementById('p-safe').value;
-
-    if(!unitId||!(amount>0)) return alert('اختر وحدة واكتب مبلغ صحيح');
-    if(!safeId) return alert('الرجاء اختيار الخزنة.');
-
-    saveState();
-
-    const isInstallmentPayment = (method === 'قسط' || method === 'جزئي') && installmentId;
-
-    if (processPayment(unitId, amount, method, date, safeId, isInstallmentPayment ? installmentId : null)) {
-      persist();
-      draw();
-      const safeName = (state.safes.find(s=>s.id===safeId)||{}).name||'—';
-      printHTML('إيصال دفع', `<h1>إيصال دفع</h1><p>الوحدة: ${unitCode(unitId)}</p><p>المبلغ: ${egp(amount)}</p><p>الطريقة: ${method}</p><p>الخزنة: ${safeName}</p><p>التاريخ: ${date}</p>`);
-    } else {
-      undo();
+  function draw() {
+    let list = state.vouchers.slice();
+    if (activeTab !== 'all') {
+      list = list.filter(v => v.type === activeTab);
     }
-  };
-  window.expPayments=()=>{
-    exportCSV(['الوحدة','المبلغ','الطريقة','الخزنة','التاريخ','مصدر'], state.payments.map(p=>[unitCode(p.unitId),p.amount,p.method||'',safeName(p.safeId), p.date||'', p.installmentId?'قسط':'' ]), 'payments.csv');
-  };
-  window.printPayments=()=>{
-    const rows=state.payments.map(p=>`<tr><td>${unitCode(p.unitId)}</td>
-    <td>${egp(p.amount)}</td><td>${p.method||'—'}</td><td>${safeName(p.safeId)}</td><td>${p.date||'—'}</td></tr>`).join('');
-    printHTML('تقرير المدفوعات', `<h1>تقرير المدفوعات</h1><table><thead><tr><th>الوحدة</th><th>المبلغ</th><th>الطريقة</th><th>الخزنة</th><th>التاريخ</th></tr></thead><tbody>${rows}</tbody></table>`);
-  };
-  window.deletePayment = function(id) {
-      const payment = state.payments.find(p => p.id === id);
-      if (!payment) return alert('لم يتم العثور على الدفعة.');
-      if (payment.installmentId) {
-          return alert('لا يمكن حذف دفعة مرتبطة بقسط. يرجى استخدام شاشة الأقساط.');
-      }
-      if (confirm(`هل أنت متأكد من حذف هذه الدفعة؟\nالمبلغ: ${egp(payment.amount)}\nالتاريخ: ${payment.date}`)) {
-          saveState();
-          // On deletion, we must also subtract the amount from the safe if possible
-          if (payment.safeId) {
-            const safe = safeById(payment.safeId);
-            if (safe) {
-              safe.balance = (safe.balance || 0) - payment.amount;
-            }
-          }
-          state.payments = state.payments.filter(p => p.id !== id);
-          persist();
-          nav('payments');
-      }
+
+    list.sort((a, b) => (b.date || '').localeCompare(a.date || '')); // Newest first
+
+    const safeName = (id) => (state.safes.find(s => s.id === id) || {}).name || '—';
+
+    const rows = list.map(v => {
+        const typeText = v.type === 'receipt' ? 'قبض' : 'صرف';
+        const typeClass = v.type === 'receipt' ? 'ok' : 'warn';
+        const party = v.type === 'receipt' ? `من: ${v.payer || 'غير محدد'}` : `إلى: ${v.beneficiary || 'غير محدد'}`;
+
+        return [
+            v.date,
+            `<span class="badge ${typeClass}">${typeText}</span>`,
+            `<span style="font-weight:bold; color:var(--${typeClass})">${egp(v.amount)}</span>`,
+            v.description,
+            safeName(v.safeId),
+            party
+        ];
+    });
+
+    const headers = ['التاريخ', 'النوع', 'المبلغ', 'البيان', 'الخزنة', 'الطرف الآخر'];
+    document.getElementById('vouchers-list').innerHTML = table(headers, rows);
   }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.onclick = () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeTab = btn.dataset.tab;
+        draw();
+    };
+  });
+
+  document.getElementById('add-expense-btn').onclick = showAddExpenseModal;
+
   draw();
 }
 
-/* ===== الشركاء + ربطهم بالوحدات ===== */
 function renderPartners(){
   view.innerHTML=`
   <div class="grid grid-2">
