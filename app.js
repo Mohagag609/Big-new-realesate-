@@ -1276,22 +1276,68 @@ function deleteContract(contractId) {
       alert('لم يتم العثور على العقد.');
       return;
     }
+
+    // First confirmation
     if (!confirm(`هل أنت متأكد من حذف العقد ${contract.code}؟ سيتم حذف جميع الأقساط والمدفوعات المرتبطة به.`)) return;
 
     const unitId = contract.unitId;
-    saveState();
-    logAction('حذف عقد وكل ما يتعلق به', { contractId, unitId, deletedContract: JSON.stringify(contract) });
+    const brokerDue = state.brokerDues.find(d => d.contractId === contractId);
+    let commissionVoucher = null;
+    if (brokerDue) {
+        commissionVoucher = state.vouchers.find(v => v.linked_ref === brokerDue.id && v.description.includes('عمولة سمسار'));
+    }
 
-    // 1. Delete all payments for the unit
+    let keepCommission = false;
+    if (commissionVoucher) { // This implies the commission was paid
+        if (!confirm("تم العثور على عمولة مدفوعة لهذا العقد. هل تريد حذفها أيضًا وإرجاع المبلغ للخزنة؟")) {
+            keepCommission = true;
+        }
+    }
+
+    saveState();
+    logAction('حذف عقد وكل ما يتعلق به', { contractId, unitId, keepCommission, deletedContract: JSON.stringify(contract) });
+
+    // 1. Handle Vouchers (receipts for installments and down payments)
+    const installmentIds = state.installments.filter(i => i.unitId === unitId).map(i => i.id);
+    const relatedVouchers = state.vouchers.filter(v => {
+        return (v.linked_ref === contractId || installmentIds.includes(v.linked_ref)) && !v.description.includes('عمولة سمسار');
+    });
+
+    relatedVouchers.forEach(v => {
+        const safe = state.safes.find(s => s.id === v.safeId);
+        if (safe && v.type === 'receipt') {
+            safe.balance -= v.amount;
+        }
+    });
+
+    const voucherIdsToDelete = new Set(relatedVouchers.map(v => v.id));
+
+    // 2. Handle Commission Voucher (if not kept)
+    if (commissionVoucher && !keepCommission) {
+        const safe = state.safes.find(s => s.id === commissionVoucher.safeId);
+        if (safe) {
+            safe.balance += commissionVoucher.amount; // It's a payment, so add it back
+        }
+        voucherIdsToDelete.add(commissionVoucher.id);
+    }
+
+    state.vouchers = state.vouchers.filter(v => !voucherIdsToDelete.has(v.id));
+
+    // Legacy payments cleanup
     state.payments = state.payments.filter(p => p.unitId !== unitId);
 
-    // 2. Delete all installments for the unit
+    // 3. Delete installments
     state.installments = state.installments.filter(i => i.unitId !== unitId);
 
-    // 3. Delete the contract itself
+    // 4. Delete broker due (if not kept)
+    if (brokerDue && !keepCommission) {
+        state.brokerDues = state.brokerDues.filter(d => d.id !== brokerDue.id);
+    }
+
+    // 5. Delete the contract itself
     state.contracts = state.contracts.filter(c => c.id !== contractId);
 
-    // 4. Update the unit's status
+    // 6. Update the unit's status
     const unit = unitById(unitId);
     if (unit) {
         unit.status = 'متاحة';
