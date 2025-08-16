@@ -384,6 +384,11 @@ function generatePartnerLedger(partnerId) {
             const installment = state.installments.find(i => i.id === v.linked_ref);
             if (installment) {
                 contract = state.contracts.find(c => c.unitId === installment.unitId);
+            } else {
+                const brokerDue = state.brokerDues.find(d => d.id === v.linked_ref);
+                if (brokerDue) {
+                    contract = state.contracts.find(c => c.id === brokerDue.contractId);
+                }
             }
         }
 
