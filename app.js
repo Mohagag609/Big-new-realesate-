@@ -1958,25 +1958,29 @@ window.payBrokerDue = function(dueId) {
         return alert('هذه العمولة غير صالحة للدفع.');
     }
 
-    const safeOptions = state.safes.map(s => `<option value="${s.id}">${s.name} (${egp(s.balance)})</option>`).join('');
+    const contract = state.contracts.find(c => c.id === due.contractId);
+    if (!contract) {
+        return alert('لم يتم العثور على العقد المرتبط بهذه العمولة.');
+    }
+
+    const safeId = contract.commissionSafeId;
+    if (!safeId) {
+        return alert('لم يتم تحديد خزنة على العقد الأصلي. لا يمكن إتمام الدفع.');
+    }
+
+    const safe = state.safes.find(s => s.id === safeId);
+    if (!safe) {
+        return alert('لم يتم العثور على الخزنة المرتبطة بالعقد.');
+    }
+
     const content = `
         <p>سيتم دفع مبلغ <strong>${egp(due.amount)}</strong> للسمسار <strong>${due.brokerName}</strong>.</p>
-        <p>الرجاء اختيار الخزنة التي سيتم الدفع منها:</p>
-        <select class="select" id="due-pay-safe" style="margin-top: 10px;">
-            <option value="">اختر الخزنة...</option>
-            ${safeOptions}
-        </select>
+        <p>سيتم خصم المبلغ من خزنة العقد: <strong>${safe.name}</strong> (الرصيد الحالي: ${egp(safe.balance)})</p>
+        <p style="color:var(--warn)">هل أنت متأكد؟</p>
     `;
 
-    showModal('دفع عمولة سمسار', content, () => {
-        const safeId = document.getElementById('due-pay-safe').value;
-        if (!safeId) {
-            alert('الرجاء اختيار خزنة.');
-            return false;
-        }
-
-        const safe = state.safes.find(s => s.id === safeId);
-        if (!safe || safe.balance < due.amount) {
+    showModal('تأكيد دفع عمولة سمسار', content, () => {
+        if (safe.balance < due.amount) {
             alert(`رصيد الخزنة "${safe.name}" غير كافٍ.`);
             return false;
         }
@@ -1992,8 +1996,7 @@ window.payBrokerDue = function(dueId) {
         due.paidFromSafeId = safeId;
 
         // 3. Create payment voucher
-        const contract = state.contracts.find(c => c.id === due.contractId);
-        const unit = contract ? unitById(contract.unitId) : null;
+        const unit = unitById(contract.unitId);
         const newVoucher = {
             id: uid('V'),
             type: 'payment',
@@ -2006,7 +2009,7 @@ window.payBrokerDue = function(dueId) {
         };
         state.vouchers.push(newVoucher);
 
-        logAction('دفع عمولة سمسar مستحقة', { brokerDueId: due.id, safeId: safeId, amount: due.amount });
+        logAction('دفع عمولة سمسار مستحقة', { brokerDueId: due.id, safeId: safeId, amount: due.amount });
 
         persist();
         nav('brokerDues'); // Refresh the view
