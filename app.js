@@ -351,7 +351,18 @@ function generatePartnerLedger(partnerId) {
 
     // Process vouchers to get income and expenses
     state.vouchers.forEach(v => {
-        const contract = state.contracts.find(c => c.id === v.linked_ref || c.unitId === v.linked_ref);
+        let contract;
+        // Find contract, accommodating different linked_ref types
+        const directContract = state.contracts.find(c => c.id === v.linked_ref);
+        if (directContract) {
+            contract = directContract;
+        } else {
+            const installment = state.installments.find(i => i.id === v.linked_ref);
+            if (installment) {
+                contract = state.contracts.find(c => c.unitId === installment.unitId);
+            }
+        }
+
         if (!contract) return;
 
         const unitPartners = state.unitPartners.filter(up => up.unitId === contract.unitId);
@@ -362,21 +373,11 @@ function generatePartnerLedger(partnerId) {
             const share = partnerLink.percent / 100;
             if (v.type === 'receipt') {
                 const income = v.amount * share;
-                transactions.push({
-                    date: v.date,
-                    description: v.description,
-                    income: income,
-                    expense: 0
-                });
+                transactions.push({ date: v.date, description: v.description, income: income, expense: 0 });
                 totalIncome += income;
-            } else if (v.description.includes('عمولة سمسار')) { // This is a commission expense
+            } else if (v.description.includes('عمولة سمسار')) { // Commission expense
                 const expense = v.amount * share;
-                transactions.push({
-                    date: v.date,
-                    description: v.description,
-                    income: 0,
-                    expense: expense
-                });
+                transactions.push({ date: v.date, description: v.description, income: 0, expense: expense });
                 totalExpense += expense;
             }
         }
@@ -1560,49 +1561,58 @@ function renderBrokerLedger(brokerName) {
 
 /* ===== الأقساط — إضافة عمود المسدد + منع التكرار في المدفوعات ===== */
 function renderInstallments(){
-  let sort = { idx: 4, dir: 'asc' };
+  let sort = { idx: 5, dir: 'asc' };
+  let currentList = [];
+
   view.innerHTML = `
     <div class="card">
       <h3>الأقساط</h3>
       <div class="tools">
-        <input class="input" id="i-q" placeholder="بحث بالوحدة/الشهر/الحالة" oninput="__inst_draw()">
+        <input class="input" id="i-q" placeholder="بحث بالوحدة/العميل/الحالة..." style="flex:1">
+        <input type="date" class="input" id="i-from">
+        <input type="date" class="input" id="i-to">
+        <button class="btn" onclick="__inst_draw()">فلترة</button>
+        <button class="btn secondary" id="i-reset-filter">إعادة تعيين</button>
         <button class="btn secondary" onclick="expInst()">CSV</button>
         <button class="btn" onclick="printInst()">طباعة PDF</button>
       </div>
-      <div id="i-list"></div>
+      <div id="i-list" style="margin-top:12px;"></div>
     </div>
   `;
   window.__inst_draw = function draw(){
-    const q = (document.getElementById('i-q') && document.getElementById('i-q').value || '').trim().toLowerCase();
+    const q = (document.getElementById('i-q')?.value || '').trim().toLowerCase();
+    const from = document.getElementById('i-from')?.value;
+    const to = document.getElementById('i-to')?.value;
+
     let list = state.installments.slice();
     if(q){
       list = list.filter(i => {
-        const searchable = `${unitCode(i.unitId)} ${i.status||''} ${i.dueDate||''}`.toLowerCase();
+        const customerName = (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name || '';
+        const searchable = `${unitCode(i.unitId)} ${customerName} ${i.status||''} ${i.dueDate||''}`.toLowerCase();
         return searchable.includes(q);
       });
     }
+    if (from) list = list.filter(i => i.dueDate >= from);
+    if (to) list = list.filter(i => i.dueDate <= to);
+
     list.sort((a,b)=>{
-      const A = [
-        unitCode(a.unitId),
-        a.type || '',
-        String((a.originalAmount != null ? a.originalAmount : a.amount) || 0),
-        String(a.amount || 0),
-        a.dueDate || '',
-        a.paymentDate || '',
-        a.status || ''
-      ];
-      const B = [
-        unitCode(b.unitId),
-        b.type || '',
-        String((b.originalAmount != null ? b.originalAmount : b.amount) || 0),
-        String(b.amount || 0),
-        b.dueDate || '',
-        b.paymentDate || '',
-        b.status || ''
-      ];
+      const originalA = a.originalAmount ?? a.amount;
+      const originalB = b.originalAmount ?? b.amount;
+      const paidA = originalA - a.amount;
+      const paidB = originalB - b.amount;
+      const customerA = (custById(state.contracts.find(c => c.unitId === a.unitId)?.customerId) || {}).name || '';
+      const customerB = (custById(state.contracts.find(c => c.unitId === b.unitId)?.customerId) || {}).name || '';
+      const partnersA = state.unitPartners.filter(up => up.unitId === a.unitId).map(up => (partnerById(up.partnerId) || {}).name).join(', ');
+      const partnersB = state.unitPartners.filter(up => up.unitId === b.unitId).map(up => (partnerById(up.partnerId) || {}).name).join(', ');
+
+      const A = [unitCode(a.unitId), customerA, partnersA, a.type || '', String(originalA), String(paidA), String(a.amount), a.dueDate || '', a.paymentDate || '', a.status || ''];
+      const B = [unitCode(b.unitId), customerB, partnersB, b.type || '', String(originalB), String(paidB), String(b.amount), b.dueDate || '', b.paymentDate || '', b.status || ''];
       return (A[sort.idx] + '').localeCompare(B[sort.idx] + '') * (sort.dir === 'asc' ? 1 : -1);
     });
-    const headers = ['الوحدة','النوع','المبلغ','المتبقي','المسدد','الاستحقاق','السداد','الحالة','دفع','إعادة جدولة','تعديل','حذف'];
+
+    currentList = list;
+
+    const headers = ['الوحدة','العميل','المستثمرون','النوع','المبلغ الأصلي','المسدد','المتبقي','الاستحقاق','تاريخ السداد','الحالة',''];
     const headHtml = headers.map((h,i)=>
       `<th data-idx="${i}" style="cursor:pointer;white-space:nowrap">${h}${sort.idx===i?(sort.dir==='asc'?' ▲':' ▼'):''}</th>`
     ).join('');
@@ -1611,42 +1621,36 @@ function renderInstallments(){
 
     const rowsHtml = list.map(i=>{
       let rowClass = '';
-      if (i.status === 'مدفوع') {
-        rowClass = 'paid';
-      } else if (i.dueDate) {
-        const dueDate = new Date(i.dueDate);
-        const sevenDaysFromNow = new Date(today);
-        sevenDaysFromNow.setDate(today.getDate() + 7);
-        if (dueDate < today) {
-          rowClass = 'overdue';
-        } else if (dueDate <= sevenDaysFromNow) {
-          rowClass = 'due-soon';
-        }
-      }
+      if (i.status === 'مدفوع') rowClass = 'paid';
+      else if (i.dueDate && new Date(i.dueDate) < today) rowClass = 'overdue';
 
       const isPaid = i.status === 'مدفوع';
-      const original = egp(i.originalAmount != null ? i.originalAmount : i.amount);
-      const remaining = egp(i.amount);
-      const paidSoFar = state.payments.filter(p => p.installmentId === i.id).reduce((sum, p) => sum + (p.amount || 0), 0);
-      const paidAmt = egp(paidSoFar);
+      const originalAmount = i.originalAmount ?? i.amount;
+      const paidAmount = originalAmount - i.amount;
+      const customerName = (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name || '—';
+      const partners = state.unitPartners.filter(up => up.unitId === i.unitId).map(up => `${(partnerById(up.partnerId) || {}).name} (${up.percent}%)`).join(', ');
+
       return `<tr class="${rowClass}">
         <td>${unitCode(i.unitId)}</td>
+        <td>${customerName}</td>
+        <td>${partners || '—'}</td>
         <td>${i.type || ''}</td>
-        <td>${original}</td>
-        <td>${remaining}</td>
-        <td>${paidAmt}</td>
+        <td>${egp(originalAmount)}</td>
+        <td>${egp(paidAmount)}</td>
+        <td><strong>${egp(i.amount)}</strong></td>
         <td><span contenteditable="${!isPaid}" onblur="inlineUpd('installments','${i.id}','dueDate',this.textContent)">${i.dueDate || ''}</span></td>
         <td>${i.paymentDate || '—'}</td>
         <td><span contenteditable="${!isPaid}" onblur="inlineUpd('installments','${i.id}','status',this.textContent)">${i.status || 'غير مدفوع'}</span></td>
-        <td><button class="btn ok" onclick="payInstallment('${i.id}', this)" ${isPaid ? 'disabled' : ''}>دفع</button></td>
-        <td><button class="btn" onclick="reschedule('${i.id}')" ${isPaid ? 'disabled' : ''}>إعادة جدولة</button></td>
-        <td><button class="btn gold" onclick="simpleEditInstallment('${i.id}')" ${isPaid ? 'disabled' : ''}>تعديل</button></td>
-        <td><button class="btn secondary" onclick="delRow('installments','${i.id}')" ${isPaid ? 'disabled' : ''}>حذف</button></td>
+        <td>
+          <button class="btn ok" onclick="payInstallment('${i.id}')" ${isPaid ? 'disabled' : ''}>دفع</button>
+          <button class="btn" onclick="reschedule('${i.id}')" ${isPaid ? 'disabled' : ''}>إعادة جدولة</button>
+          <button class="btn secondary" onclick="delRow('installments','${i.id}')" ${isPaid ? 'disabled' : ''}>حذف</button>
+        </td>
       </tr>`;
     }).join('');
     document.getElementById('i-list').innerHTML =
       `<table class="table"><thead><tr>${headHtml}</tr></thead><tbody>${
-        rowsHtml || `<tr><td colspan="12"><small>لا توجد بيانات</small></td></tr>`
+        rowsHtml || `<tr><td colspan="${headers.length}"><small>لا توجد بيانات</small></td></tr>`
       }</tbody></table>`;
     document.querySelectorAll('#i-list thead th').forEach(th=>{
       th.onclick = function(){
@@ -1656,72 +1660,75 @@ function renderInstallments(){
         __inst_draw();
       };
     });
+    document.getElementById('i-reset-filter').onclick = () => {
+        document.getElementById('i-q').value = '';
+        document.getElementById('i-from').value = '';
+        document.getElementById('i-to').value = '';
+        __inst_draw();
+    };
   };
   window.expInst = function(){
-    const headers=['الوحدة','النوع','المبلغ','المتبقي','المسدد','الاستحقاق','السداد','الحالة'];
-    const rows=state.installments.map(i=>[
-      unitCode(i.unitId),
-      i.type,
-      (i.originalAmount != null ? i.originalAmount : i.amount),
-      i.amount,
-      Math.max(0,(i.originalAmount != null ? i.originalAmount : i.amount) - (i.amount||0)),
-      i.dueDate||'',
-      i.paymentDate||'',
-      i.status||''
-    ]);
+    const headers=['الوحدة','النوع','المبلغ الأصلي','المسدد','المتبقي','الاستحقاق','تاريخ السداد','الحالة'];
+    const rows=currentList.map(i=> {
+        const originalAmount = i.originalAmount ?? i.amount;
+        const paidAmount = originalAmount - i.amount;
+        return [unitCode(i.unitId), i.type, originalAmount, paidAmount, i.amount, i.dueDate||'', i.paymentDate||'', i.status||''];
+    });
     exportCSV(headers, rows, 'installments.csv');
   };
   window.printInst = function(){
-    const rows=state.installments.map(i=>`
+    const rows=currentList.map(i=> {
+      const originalAmount = i.originalAmount ?? i.amount;
+      const paidAmount = originalAmount - i.amount;
+      return `
       <tr>
         <td>${unitCode(i.unitId)}</td>
         <td>${i.type || ''}</td>
-        <td>${egp(i.originalAmount != null ? i.originalAmount : i.amount)}</td>
+        <td>${egp(originalAmount)}</td>
+        <td>${egp(paidAmount)}</td>
         <td>${egp(i.amount)}</td>
-        <td>${egp(Math.max(0,(i.originalAmount != null ? i.originalAmount : i.amount) - (i.amount||0)))}</td>
         <td>${i.dueDate || ''}</td>
         <td>${i.paymentDate || ''}</td>
         <td>${i.status || ''}</td>
-      </tr>`).join('');
+      </tr>`}).join('');
     printHTML('تقرير الأقساط',
       `<h1>تقرير الأقساط</h1>
        <table>
          <thead><tr>
-           <th>الوحدة</th><th>النوع</th><th>المبلغ</th><th>المتبقي</th><th>المسدد</th><th>الاستحقاق</th><th>السداد</th><th>الحالة</th>
+           <th>الوحدة</th><th>النوع</th><th>المبلغ الأصلي</th><th>المسدد</th><th>المتبقي</th><th>الاستحقاق</th><th>تاريخ السداد</th><th>الحالة</th>
          </tr></thead>
          <tbody>${rows}</tbody>
        </table>`);
   };
-  window.payInstallment = function(id, btn){
-    if (btn) btn.disabled = true;
-    try {
+  window.payInstallment = function(id){
       const i = state.installments.find(x=>x.id===id);
-      if(!i || i.status==='مدفوع' || i.amount<=0) {
-          alert('هذا القسط غير صالح للدفع.');
-          return;
-      }
+      if(!i || i.status==='مدفوع' || i.amount<=0) return alert('هذا القسط غير صالح للدفع.');
 
-      const safeId = prompt(`اختر خزنة للدفع:\n${state.safes.map((s,idx)=>`${idx+1}: ${s.name}`).join('\n')}`, '1');
-      if (!safeId) return; // User cancelled
-      const selectedSafe = state.safes[parseInt(safeId, 10)-1];
-      if (!selectedSafe) {
-        alert('اختيار غير صالح.');
-        return;
-      }
-
-      const paid = Number(prompt('المبلغ المدفوع:', i.amount) || 0);
-      if(!(paid>0)) return;
-
-      saveState();
-      if (processPayment(i.unitId, paid, 'قسط', today(), selectedSafe.id, i.id)) {
-        persist();
-        __inst_draw();
-      } else {
-        undo();
-      }
-    } finally {
-        if (btn) setTimeout(() => { btn.disabled = false; }, 200);
-    }
+      const safeOptions = state.safes.map(s => `<option value="${s.id}">${s.name} (${egp(s.balance)})</option>`).join('');
+      const content = `
+          <p>المبلغ المتبقي على القسط: <strong>${egp(i.amount)}</strong></p>
+          <input class="input" id="inst-pay-amount" type="number" placeholder="المبلغ المدفوع" value="${i.amount}">
+          <select class="select" id="inst-pay-safe" style="margin-top: 10px;">
+              <option value="">اختر الخزنة...</option>
+              ${safeOptions}
+          </select>
+      `;
+      showModal('تسجيل دفعة قسط', content, () => {
+          const paid = parseNumber(document.getElementById('inst-pay-amount').value);
+          const safeId = document.getElementById('inst-pay-safe').value;
+          if(!(paid > 0) || !safeId) {
+              alert('الرجاء إدخال مبلغ صحيح واختيار خزنة.');
+              return false;
+          }
+          saveState();
+          if (processPayment(i.unitId, paid, 'قسط', today(), safeId, i.id)) {
+            persist();
+            __inst_draw();
+          } else {
+            undo();
+          }
+          return true;
+      });
   };
   window.reschedule = function(id){
     const i = state.installments.find(x=>x.id===id); if(!i) return;
