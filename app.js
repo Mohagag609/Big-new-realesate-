@@ -1474,6 +1474,7 @@ function renderContracts(){
         <input class="input" id="ct-down" placeholder="المقدم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <select class="select" id="ct-downpayment-safe"><option value="">اختر خزنة المقدم...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
         <input class="input" id="ct-discount" placeholder="مبلغ الخصم" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="ct-maintenance-deposit" placeholder="وديعة الصيانة" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <select class="select" id="ct-broker-name"><option value="">اختر سمسار...</option>${state.brokers.map(b=>`<option value="${b.name}">${b.name}</option>`).join('')}</select>
         <input class="input" id="ct-brokerp" placeholder="نسبة العمولة %" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
         <select class="select" id="ct-commission-safe"><option value="">اختر خزنة العمولة...</option>${state.safes.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
@@ -1541,6 +1542,7 @@ function renderContracts(){
     const type=document.getElementById('ct-type').value, count=parseInt(document.getElementById('ct-count').value||'0',10);
     const extra=parseInt(document.getElementById('ct-annual-bonus').value||'0',10);
     const annualBonusValue = parseNumber(document.getElementById('ct-annual-bonus-value').value);
+    const maintenanceDeposit = parseNumber(document.getElementById('ct-maintenance-deposit').value);
     const startStr=document.getElementById('ct-start').value||today(); const start=new Date(startStr);
 
     if(paymentType === 'installment' && count <= 0 && extra <= 0) return alert('الرجاء إدخال عدد دفعات أو عدد دفعات سنوية.');
@@ -1548,7 +1550,7 @@ function renderContracts(){
 
     // Create contract object first
     const code='CTR-'+String(state.contracts.length+1).padStart(5,'0');
-    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, brokerName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, type, count, extraAnnual:Math.min(Math.max(extra,0),3), annualPaymentValue: annualBonusValue, start:startStr};
+    const ct={id:uid('CT'), code, unitId, customerId, totalPrice:total, downPayment:down, discountAmount: discount, maintenanceDeposit, brokerName, brokerPercent:brokerP, brokerAmount:brokerAmt, commissionSafeId, type, count, extraAnnual:Math.min(Math.max(extra,0),3), annualPaymentValue: annualBonusValue, start:startStr};
     state.contracts.push(ct);
     logAction('إنشاء عقد جديد', { contractId: ct.id, unitId, customerId, price: total });
 
@@ -1585,10 +1587,10 @@ function renderContracts(){
         }
 
         const amountForRegularInstallments = totalAfterDown - totalAnnualPayments;
+        const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
 
         // Generate regular installments
         if (count > 0) {
-            const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
             const baseAmount = Math.floor((amountForRegularInstallments / count) * 100) / 100;
             let accumulatedAmount = 0;
             for(let i=0; i<count; i++){
@@ -1605,6 +1607,26 @@ function renderContracts(){
           const d = new Date(start);
           d.setMonth(d.getMonth() + 12 * (j + 1));
           state.installments.push({id:uid('I'),unitId,type:'دفعة سنوية',amount:annualBonusValue,originalAmount:annualBonusValue,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+        }
+
+        // Generate maintenance deposit installment
+        if (ct.maintenanceDeposit > 0) {
+            const allInstallments = state.installments.filter(i => i.unitId === unitId);
+            const lastInstallment = allInstallments.sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''))[0];
+            const lastDate = new Date(lastInstallment ? lastInstallment.dueDate : startStr);
+
+            lastDate.setMonth(lastDate.getMonth() + months);
+
+            state.installments.push({
+                id: uid('I'),
+                unitId,
+                type: 'دفعة صيانة',
+                amount: ct.maintenanceDeposit,
+                originalAmount: ct.maintenanceDeposit,
+                dueDate: lastDate.toISOString().slice(0,10),
+                paymentDate: null,
+                status:'غير مدفوع'
+            });
         }
     }
 
