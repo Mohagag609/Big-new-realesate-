@@ -1,28 +1,12 @@
-# برنامج إدارة الاستثمار العقاري (إصدار HTML مستقل)
+# React + Vite
 
-هذا هو برنامج لإدارة الاستثمارات العقارية يعمل بشكل كامل كصفحة ويب واحدة (Single Page Application) في متصفحك. لا يتطلب أي خادم خلفي (backend) أو قاعدة بيانات.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## الميزات
+Currently, two official plugins are available:
 
-- **إدارة شاملة:** يمكنك إدارة الوحدات، الشركاء، العملاء، العقود، الأقساط، والدفعات.
-- **يعمل بدون اتصال بالإنترنت:** البرنامج يعمل بالكامل على جهازك.
-- **تخزين محلي:** يتم حفظ بياناتك تلقائيًا في الـ `localStorage` الخاص بالمتصفح، لذا ستجد بياناتك عند العودة للبرنامج.
-- **حفظ وتحميل:** يمكنك حفظ نسخة من بياناتك على شكل ملف `JSON` على جهازك، واستعادتها في أي وقت.
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
 
-## كيفية التشغيل
+## Expanding the ESLint configuration
 
-فقط قم بفتح ملف `index.html` في أي متصفح ويب حديث (مثل Google Chrome, Firefox).
-
-## كيفية استخدام حفظ وتحميل البيانات
-
-1.  **لحفظ بياناتك في ملف:**
-    -   اذهب إلى صفحة "حفظ وتحميل" من القائمة العلوية.
-    -   اضغط على زر "تنزيل ملف البيانات".
-    -   سيتم تنزيل ملف بامتداد `.json` يحتوي على جميع بياناتك. احتفظ بهذا الملف في مكان آمن.
-
-2.  **لتحميل بيانات من ملف:**
-    -   اذهب إلى صفحة "حفظ وتحميل".
-    -   اضغط على زر "اختر ملف البيانات" واختر ملف الـ `JSON` الذي قمت بحفظه سابقًا.
-    -   اضغط على زر "تحميل البيانات".
-    -   **تحذير:** سيتم استبدال جميع البيانات الحالية بالبيانات الموجودة في الملف.
-    -   سيتم إعادة تحميل الصفحة بالبيانات الجديدة.
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.

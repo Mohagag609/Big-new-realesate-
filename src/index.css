@@ -1,0 +1,103 @@
+/* Reset and base styles */
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Card component styles */
+.card {
+    background-color: #fff;
+    padding: 24px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.09);
+}
+
+.card h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #f0f0f0;
+    padding-bottom: 12px;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.big-number {
+    font-size: 32px;
+    font-weight: 700;
+    color: #001529;
+}
+
+/* General page styles */
+h1 {
+    font-size: 28px;
+    margin-top: 0;
+    margin-bottom: 24px;
+}
+
+/* Table Styles */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.data-table th, .data-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    text-align: right;
+}
+
+.data-table th {
+    background-color: #fafafa;
+    font-weight: 600;
+}
+
+.data-table tbody tr:hover {
+    background-color: #fafafa;
+}
+
+/* Form and Button Styles */
+input[type="text"], input[type="number"] {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    box-sizing: border-box; /* Important */
+    transition: all 0.3s;
+}
+
+input[type="text"]:focus {
+    border-color: #1890ff;
+    box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+    outline: none;
+}
+
+button {
+    padding: 8px 16px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s;
+}
+
+.btn-primary {
+    background-color: #1890ff;
+    color: #fff;
+    border-color: #1890ff;
+}
+.btn-primary:hover {
+    background-color: #40a9ff;
+    border-color: #40a9ff;
+}
+
+.btn-danger {
+    background-color: #ff4d4f;
+    color: #fff;
+    border-color: #ff4d4f;
+}
+.btn-danger:hover {
+    background-color: #ff7875;
+    border-color: #ff7875;
+}
