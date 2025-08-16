@@ -194,6 +194,7 @@ const routes=[
   {id:'backup',title:'نسخة احتياطية',render:renderBackup, tab: true},
   {id:'unit-details', title:'تفاصيل الوحدة', render:renderUnitDetails, tab: false},
   {id: 'broker-ledger', title: 'كشف حساب سمسار', render: renderBrokerLedger, tab: false},
+  {id: 'partner-details', title: 'تفاصيل الشريك', render: renderPartnerDetails, tab: false},
 ];
 const tabs=document.getElementById('tabs'), view=document.getElementById('view');
 routes.forEach(r=>{ if(r.tab){const b=document.createElement('button'); b.className='tab'; b.id='tab-'+r.id; b.textContent=r.title; b.onclick=()=>nav(r.id); tabs.appendChild(b);} });
@@ -282,78 +283,126 @@ function partnerById(id){ return state.partners.find(p=>p.id===id); }
 function unitCode(id){ return (unitById(id)||{}).code||'—'; }
 
 
-function generatePartnerLedger(partnerId) {
-    const transactions = [];
+function renderPartnerDetails(partnerId) {
+    const partner = partnerById(partnerId);
+    if (!partner) {
+        view.innerHTML = `<div class="card"><p>لم يتم العثور على الشريك.</p></div>`;
+        return;
+    }
 
-    // 1. Income from customer payments
-    state.payments.forEach(p => {
-        const unitPartners = state.unitPartners.filter(up => up.unitId === p.unitId);
-        if (unitPartners.length === 0) return;
+    const ledger = generatePartnerLedger(partnerId);
+    const ownedUnits = state.unitPartners.filter(up => up.partnerId === partnerId);
 
-        const partnerLink = unitPartners.find(up => up.partnerId === partnerId);
-        if (partnerLink) {
-            const income = p.amount * (partnerLink.percent / 100);
-            transactions.push({
-                date: p.date,
-                description: `حصيلة دفعة للوحدة ${unitCode(p.unitId)}`,
-                income: income,
-                expense: 0
-            });
-        }
+    const kpiHTML = `
+        <div class="card"><h4>إجمالي الدخل</h4><div class="big" style="color:var(--ok);">${egp(ledger.totalIncome)}</div></div>
+        <div class="card"><h4>إجمالي المصروفات</h4><div class="big" style="color:var(--warn);">${egp(ledger.totalExpense)}</div></div>
+        <div class="card"><h4>صافي الموقف</h4><div class="big" style="color:var(--brand);">${egp(ledger.netPosition)}</div></div>
+    `;
+
+    const unitsRows = ownedUnits.map(up => [
+        unitCode(up.unitId),
+        `${up.percent} %`
+    ]);
+
+    let balance = 0;
+    const ledgerRows = ledger.transactions.map(tx => {
+        balance += (tx.income || 0) - (tx.expense || 0);
+        return [
+            tx.date,
+            tx.description,
+            tx.income ? `<span style="color:var(--ok)">${egp(tx.income)}</span>` : '—',
+            tx.expense ? `<span style="color:var(--warn)">${egp(tx.expense)}</span>` : '—',
+            `<strong style="color:var(--brand)">${egp(balance)}</strong>`
+        ];
     });
 
-    // 2. Income from down payments and expenses from contracts
-    state.contracts.forEach(c => {
-        const unitPartners = state.unitPartners.filter(up => up.unitId === c.unitId);
+    view.innerHTML = `
+        <div class="card">
+            <div class="header">
+                <h3>تفاصيل الشريك: ${partner.name}</h3>
+                <button class="btn secondary" onclick="nav('partners')">⬅️ العودة للشركاء</button>
+            </div>
+            <p style="color:var(--muted);">${partner.phone||''}</p>
+        </div>
+
+        <div class="grid grid-3" style="margin-top:16px;">
+            ${kpiHTML}
+        </div>
+
+        <div class="grid grid-2" style="margin-top:16px; align-items: flex-start;">
+            <div class="card">
+                <h4>الوحدات المملوكة</h4>
+                ${table(['الوحدة', 'نسبة الملكية'], unitsRows)}
+            </div>
+            <div class="card">
+                <h4>كشف الحساب التفصيلي</h4>
+                <div style="max-height: 400px; overflow-y: auto;">
+                    ${table(['التاريخ', 'البيان', 'دخل', 'صرف', 'الرصيد'], ledgerRows)}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function generatePartnerLedger(partnerId) {
+    const transactions = [];
+    let totalIncome = 0;
+    let totalExpense = 0;
+
+    // Process vouchers to get income and expenses
+    state.vouchers.forEach(v => {
+        const contract = state.contracts.find(c => c.id === v.linked_ref || c.unitId === v.linked_ref);
+        if (!contract) return;
+
+        const unitPartners = state.unitPartners.filter(up => up.unitId === contract.unitId);
         if (unitPartners.length === 0) return;
 
         const partnerLink = unitPartners.find(up => up.partnerId === partnerId);
         if (partnerLink) {
-            if (c.downPayment > 0) {
-                const income = c.downPayment * (partnerLink.percent / 100);
+            const share = partnerLink.percent / 100;
+            if (v.type === 'receipt') {
+                const income = v.amount * share;
                 transactions.push({
-                    date: c.start,
-                    description: `حصيلة مقدم العقد للوحدة ${unitCode(c.unitId)}`,
+                    date: v.date,
+                    description: v.description,
                     income: income,
                     expense: 0
                 });
-            }
-            if (c.brokerAmount > 0) {
-                const expense = c.brokerAmount * (partnerLink.percent / 100);
+                totalIncome += income;
+            } else if (v.description.includes('عمولة سمسار')) { // This is a commission expense
+                const expense = v.amount * share;
                 transactions.push({
-                    date: c.start,
-                    description: `عمولة سمسار للوحدة ${unitCode(c.unitId)}`,
+                    date: v.date,
+                    description: v.description,
                     income: 0,
                     expense: expense
                 });
+                totalExpense += expense;
             }
         }
     });
 
-    // 3. Income/Expense from inter-partner debts
+    // Process inter-partner debts
     state.partnerDebts.forEach(d => {
         if (d.status !== 'مدفوع') return;
-
-        if (d.owedPartnerId === partnerId) { // This partner received money
-            transactions.push({
-                date: d.paymentDate,
-                description: `تحصيل دين من ${partnerById(d.payingPartnerId)?.name || 'شريك'}`,
-                income: d.amount,
-                expense: 0
-            });
+        if (d.owedPartnerId === partnerId) {
+            transactions.push({ date: d.paymentDate, description: `تحصيل دين من ${partnerById(d.payingPartnerId)?.name || 'شريك'}`, income: d.amount, expense: 0 });
+            totalIncome += d.amount;
         }
-        if (d.payingPartnerId === partnerId) { // This partner paid money
-            transactions.push({
-                date: d.paymentDate,
-                description: `سداد دين إلى ${partnerById(d.owedPartnerId)?.name || 'شريك'}`,
-                income: 0,
-                expense: d.amount
-            });
+        if (d.payingPartnerId === partnerId) {
+            transactions.push({ date: d.paymentDate, description: `سداد دين إلى ${partnerById(d.owedPartnerId)?.name || 'شريك'}`, income: 0, expense: d.amount });
+            totalExpense += d.amount;
         }
     });
 
-    // 4. Sort transactions by date
-    return transactions.sort((a,b) => (a.date||'').localeCompare(b.date||''));
+    transactions.sort((a,b) => (a.date||'').localeCompare(b.date||''));
+
+    return {
+        transactions,
+        totalIncome,
+        totalExpense,
+        netPosition: totalIncome - totalExpense
+    };
 }
 
 function calculateKpis(filter = {}) {
@@ -1858,7 +1907,11 @@ function renderPartners(){
         </div>
       </div>
     `;
-    const prRows = state.partners.map(p => [p.name, p.phone, `<button class="btn secondary" onclick="delRow('partners','${p.id}')">حذف</button>`]);
+    const prRows = state.partners.map(p => [
+        `<a href="#" onclick="nav('partner-details', '${p.id}'); return false;">${p.name}</a>`,
+        p.phone,
+        `<button class="btn secondary" onclick="delRow('partners','${p.id}')">حذف</button>`
+    ]);
     document.getElementById('pr-list').innerHTML = table(['الاسم', 'الهاتف', ''], prRows);
   }
 
