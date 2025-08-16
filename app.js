@@ -69,6 +69,11 @@ function load(){
           delete u.totalPrice;
         }
         u.plans = u.plans || [];
+        u.plans.forEach(p => {
+            if (!p.type) {
+                p.type = 'installment'; // Default to installment
+            }
+        });
       });
     }
 
@@ -1060,12 +1065,16 @@ function renderUnitDetails(unitId){
   }
 
   function drawPlans(){
-    const rows = u.plans.map(p => [
+    const rows = u.plans.map(p => {
+      const typeText = p.type === 'cash' ? 'كاش' : 'تقسيط';
+      return [
         `<span contenteditable="true" onblur="editPlanProp('${p.id}', 'name', this.textContent)">${p.name}</span>`,
         `<span contenteditable="true" onblur="editPlanProp('${p.id}', 'price', this.textContent, true)">${egp(p.price)}</span>`,
+        `<span>${typeText}</span>`,
         `<button class="btn secondary" onclick="removePlanFromUnit('${p.id}')">حذف</button>`
-    ]);
-    document.getElementById('ud-plans-list').innerHTML = table(['اسم الخطة', 'السعر', ''], rows);
+      ]
+    });
+    document.getElementById('ud-plans-list').innerHTML = table(['اسم الخطة', 'السعر', 'النوع', ''], rows);
   }
 
   view.innerHTML = `
@@ -1095,10 +1104,16 @@ function renderUnitDetails(unitId){
                 <div id="ud-plans-list"></div>
                 <hr>
                 <h4>إضافة خطة سعر جديدة</h4>
-                <div class="tools">
-                    <input class="input" id="ud-plan-name" placeholder="اسم الخطة (مثلاً: كاش)">
+                <div class="tools grid grid-4">
+                    <input class="input" id="ud-plan-name" placeholder="اسم الخطة (مثلاً: كاش)" style="grid-column: span 2;">
                     <input class="input" id="ud-plan-price" type="number" placeholder="السعر">
-                    <button class="btn" onclick="addPlanToUnit('${u.id}')">إضافة</button>
+                    <select class="select" id="ud-plan-type">
+                        <option value="installment">تقسيط</option>
+                        <option value="cash">كاش</option>
+                    </select>
+                </div>
+                <div class="tools" style="margin-top: 8px;">
+                    <button class="btn" onclick="addPlanToUnit('${u.id}')" style="flex: 1;">إضافة الخطة</button>
                 </div>
             </div>
         </div>
@@ -1125,14 +1140,15 @@ function renderUnitDetails(unitId){
   window.addPlanToUnit = (unitId) => {
     const name = document.getElementById('ud-plan-name').value.trim();
     const price = parseNumber(document.getElementById('ud-plan-price').value);
+    const type = document.getElementById('ud-plan-type').value;
     if (!name || !price) return alert('الرجاء إدخال اسم وسعر الخطة.');
     const unit = unitById(unitId);
     if (!unit) return;
     if (unit.plans.some(p => p.name.toLowerCase() === name.toLowerCase())) return alert('خطة بنفس الاسم موجودة بالفعل.');
 
     saveState();
-    const newPlan = { id: uid('PL'), name, price };
-    logAction('إضافة خطة سعر لوحدة', { unitId, planName: name, price });
+    const newPlan = { id: uid('PL'), name, price, type };
+    logAction('إضافة خطة سعر لوحدة', { unitId, planName: name, price, type });
     unit.plans.push(newPlan);
     persist();
     drawPlans();
@@ -1268,6 +1284,7 @@ function renderContracts(){
     const planSelect = document.getElementById('ct-plan');
     const planName = planSelect.options[planSelect.selectedIndex]?.text;
     const planId = planSelect.value;
+    const planType = planSelect.options[planSelect.selectedIndex]?.dataset.type;
 
     if (brokerAmt > 0 && !commissionSafeId) {
       return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
@@ -1296,7 +1313,8 @@ function renderContracts(){
     const type=document.getElementById('ct-type').value, count=parseInt(document.getElementById('ct-count').value||'0',10);
     const extra=parseInt(document.getElementById('ct-annual-bonus').value||'0',10);
     const startStr=document.getElementById('ct-start').value||today(); const start=new Date(startStr);
-    if(count<=0) return alert('عدد الدفعات غير صالح');
+
+    if(planType === 'installment' && count <= 0) return alert('عدد الدفعات غير صالح');
 
     const maintAmt=Math.round((total*maintP/100)*100)/100;
 
@@ -1310,19 +1328,21 @@ function renderContracts(){
     state.contracts.push(ct);
 
     // توليد الأقساط
-    const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
-    const remain=Math.max(0, (total - discount - down) + maintAmt); // Installments cover remaining price + maintenance
-    const parts=count + ct.extraAnnual;
-    const base=Math.floor((remain/parts)*100)/100; let acc=0;
-    for(let i=0;i<count;i++){
-      const d=new Date(start); d.setMonth(d.getMonth()+months*(i+1));
-      const amt=(i===count-1 && ct.extraAnnual===0)? Math.round((remain-acc)*100)/100 : base; acc+=amt;
-      state.installments.push({id:uid('I'),unitId,type,amount:amt,originalAmount:amt,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
-    }
-    for(let j=0;j<ct.extraAnnual;j++){
-      const d=new Date(start); d.setMonth(d.getMonth()+12*(j+1));
-      const amt=(j===ct.extraAnnual-1)? Math.round((remain-acc)*100)/100 : base; acc+=amt;
-      state.installments.push({id:uid('I'),unitId,type:'سَنوي إضافي',amount:amt,originalAmount:amt,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+    if (planType === 'installment') {
+        const months={'شهري':1,'ربع سنوي':3,'نصف سنوي':6,'سنوي':12}[type]||1;
+        const remain=Math.max(0, (total - discount - down) + maintAmt); // Installments cover remaining price + maintenance
+        const parts=count + ct.extraAnnual;
+        const base=Math.floor((remain/parts)*100)/100; let acc=0;
+        for(let i=0;i<count;i++){
+          const d=new Date(start); d.setMonth(d.getMonth()+months*(i+1));
+          const amt=(i===count-1 && ct.extraAnnual===0)? Math.round((remain-acc)*100)/100 : base; acc+=amt;
+          state.installments.push({id:uid('I'),unitId,type,amount:amt,originalAmount:amt,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+        }
+        for(let j=0;j<ct.extraAnnual;j++){
+          const d=new Date(start); d.setMonth(d.getMonth()+12*(j+1));
+          const amt=(j===ct.extraAnnual-1)? Math.round((remain-acc)*100)/100 : base; acc+=amt;
+          state.installments.push({id:uid('I'),unitId,type:'سَنوي إضافي',amount:amt,originalAmount:amt,dueDate:d.toISOString().slice(0,10),paymentDate:null,status:'غير مدفوع'});
+        }
     }
 
     const u=unitById(unitId); if(u) u.status='مباعة';
@@ -1353,6 +1373,55 @@ function renderContracts(){
     printHTML('عقد بيع', html);
   };
 
+  const unitSelect = document.getElementById('ct-unit');
+  const planSelect = document.getElementById('ct-plan');
+  const totalInput = document.getElementById('ct-total');
+  const downPaymentInput = document.getElementById('ct-down');
+  const installmentFields = [
+      document.getElementById('ct-type'),
+      document.getElementById('ct-count'),
+      document.getElementById('ct-annual-bonus')
+  ];
+
+  function updateFormForPlan() {
+      const selectedOption = planSelect.options[planSelect.selectedIndex];
+
+      const planType = selectedOption?.dataset.type;
+      const planPrice = parseFloat(selectedOption?.dataset.price || '0');
+
+      totalInput.value = planPrice || '';
+
+      if (planType === 'cash') {
+          installmentFields.forEach(f => f.disabled = true);
+          downPaymentInput.value = planPrice || '';
+          downPaymentInput.readOnly = true;
+      } else { // installment or nothing selected
+          installmentFields.forEach(f => f.disabled = false);
+          downPaymentInput.readOnly = false;
+      }
+      updateTotalInstallments();
+  }
+
+  function updatePlansForUnit() {
+      const unitId = unitSelect.value;
+      const unit = unitById(unitId);
+
+      planSelect.innerHTML = '<option value="">اختر خطة السعر...</option>';
+      totalInput.value = '';
+
+      if (unit && unit.plans) {
+          unit.plans.forEach(plan => {
+              const option = document.createElement('option');
+              option.value = plan.id;
+              option.textContent = plan.name;
+              option.dataset.type = plan.type;
+              option.dataset.price = plan.price;
+              planSelect.appendChild(option);
+          });
+      }
+      updateFormForPlan();
+  }
+
   function updateTotalInstallments() {
     const countInput = document.getElementById('ct-count');
     const extraInput = document.getElementById('ct-annual-bonus');
@@ -1364,10 +1433,13 @@ function renderContracts(){
     totalDisplay.textContent = count + extra;
   }
 
+  unitSelect.onchange = updatePlansForUnit;
+  planSelect.onchange = updateFormForPlan;
   document.getElementById('ct-count').oninput = updateTotalInstallments;
   document.getElementById('ct-annual-bonus').oninput = updateTotalInstallments;
 
   draw();
+  updatePlansForUnit();
   updateTotalInstallments();
 }
 
