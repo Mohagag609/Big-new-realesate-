@@ -1596,6 +1596,77 @@ function renderInstallments(){
   __inst_draw();
 }
 
+function processPayment(unitId, amount, method, date, safeId, installmentId = null) {
+    if (!unitId || !amount || !date || !safeId) {
+        alert('بيانات الدفع غير مكتملة.');
+        return false;
+    }
+
+    const safe = state.safes.find(s => s.id === safeId);
+    if (!safe) {
+        alert('لم يتم العثور على الخزنة المحددة.');
+        return false;
+    }
+
+    let remainingAmountToProcess = amount;
+
+    // Create the main payment record
+    const payment = {
+        id: uid('P'),
+        unitId,
+        amount, // The total amount of this transaction
+        method,
+        date,
+        safeId,
+        installmentId // Link to the initial installment if provided
+    };
+    logAction('تسجيل دفعة', { paymentId: payment.id, unitId, amount, safeId });
+    state.payments.push(payment);
+
+    // Add money to the safe
+    safe.balance = (safe.balance || 0) + amount;
+
+    // If this payment is for an installment, apply it to the installments
+    const installmentsToPay = state.installments
+        .filter(i => i.unitId === unitId && i.status !== 'مدفوع')
+        .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+    if (installmentsToPay.length === 0 && installmentId) {
+        // This case is weird, a payment for an installment but no payable installments found.
+        // We'll just log it and proceed with the basic payment record.
+        console.warn(`Payment made for installment ${installmentId}, but no payable installments found for unit ${unitId}.`);
+        return true;
+    }
+
+    for (const inst of installmentsToPay) {
+        if (remainingAmountToProcess <= 0) break;
+
+        const amountToPayOnThisInstallment = Math.min(remainingAmountToProcess, inst.amount);
+
+        if (typeof inst.originalAmount !== 'number') {
+            inst.originalAmount = inst.amount;
+        }
+
+        inst.amount -= amountToPayOnThisInstallment;
+        remainingAmountToProcess -= amountToPayOnThisInstallment;
+
+        if (inst.amount <= 0.005) { // Use a small epsilon for float comparison
+            inst.amount = 0;
+            inst.status = 'مدفوع';
+            inst.paymentDate = date;
+        } else {
+            inst.status = 'مدفوع جزئياً';
+        }
+        logAction('تطبيق دفعة على قسط', { installmentId: inst.id, paidAmount: amountToPayOnThisInstallment, remainingAmount: inst.amount });
+    }
+
+    if (remainingAmountToProcess > 0.005) {
+        console.log(`Overpayment of ${egp(remainingAmountToProcess)} for unit ${unitId}.`);
+    }
+
+    return true; // Success
+}
+
 /* ===== المدفوعات ===== */
 function renderPayments(){
   const safeById = (id) => state.safes.find(s => s.id === id);
@@ -1828,98 +1899,205 @@ function renderTreasury() {
     };
 }
 
+const REPORT_DEFINITIONS = {
+  'المالية': [
+    {
+      id: 'payments_monthly',
+      title: 'مدفوعات شهرية',
+      description: 'عرض إجمالي المدفوعات مجمعة حسب الشهر.',
+      icon: '📅'
+    },
+    {
+      id: 'cashflow',
+      title: 'التدفقات النقدية العامة',
+      description: 'كشف حساب يوضح كل الحركات المالية الداخلة والخارجة.',
+      icon: '💰'
+    }
+  ],
+  'الشركاء': [
+    {
+      id: 'partner_summary',
+      title: 'ملخص أرباح الشركاء',
+      description: 'عرض ملخص دخل ومصروفات وصافي ربح كل شريك.',
+      icon: '👥'
+    },
+    {
+      id: 'partner_profits',
+      title: 'تفاصيل أرباح الشركاء',
+      description: 'عرض تفصيلي لكل دفعة وكيف تم توزيعها كأرباح على الشركاء.',
+      icon: '📊'
+    },
+    {
+      id: 'partner_cashflow',
+      title: 'ملخص تدفقات الشركاء',
+      description: 'عرض شهري لحصة الأرباح الخاصة بشريك معين.',
+      icon: '📈'
+    }
+  ],
+  'المتابعة': [
+    {
+      id: 'inst_due',
+      title: 'كل الأقساط المستحقة',
+      description: 'قائمة بكل الأقساط القادمة التي لم يتم سدادها بعد.',
+      icon: '🔔'
+    },
+    {
+      id: 'inst_overdue',
+      title: 'الأقساط المتأخرة فقط',
+      description: 'عرض الأقساط التي تجاوزت تاريخ استحقاقها ولم تسدد.',
+      icon: '⚠️'
+    },
+    {
+      id: 'cust_activity',
+      title: 'نشاط العملاء',
+      description: 'تقرير يوضح عدد الوحدات وإجمالي المدفوعات لكل عميل.',
+      icon: '🧍'
+    },
+    {
+      id: 'units_status',
+      title: 'حالة الوحدات',
+      description: 'ملخص لعدد الوحدات المتاحة، المباعة، والمحجوزة.',
+      icon: '🏠'
+    }
+  ]
+};
+
 /* ===== التقارير ===== */
-function renderReports(){
-  let selectedReportType = null;
+function renderReports() {
+  const categories = Object.keys(REPORT_DEFINITIONS);
+  let activeCategory = categories[0];
 
-  view.innerHTML=`
+  view.innerHTML = `
+    <div class="reports-layout">
+      <div class="report-cards-grid">
+        <!-- Report cards will be rendered here -->
+      </div>
+      <div class="report-categories">
+        <h3>الفئات</h3>
+        <ul id="report-category-list"></ul>
+      </div>
+    </div>
+  `;
+
+  const categoryListEl = document.getElementById('report-category-list');
+
+  function selectCategory(category) {
+    activeCategory = category;
+    // Update active class on list items
+    document.querySelectorAll('#report-category-list li').forEach(li => {
+      if (li.dataset.category === category) {
+        li.classList.add('active');
+      } else {
+        li.classList.remove('active');
+      }
+    });
+    // Render the cards for the selected category
+    renderReportCards(category);
+  }
+
+  // Render category list
+  categories.forEach(category => {
+    const li = document.createElement('li');
+    li.textContent = category;
+    li.dataset.category = category;
+    li.onclick = () => selectCategory(category);
+    categoryListEl.appendChild(li);
+  });
+
+  // Initial render
+  if (categoryListEl.firstChild) {
+    selectCategory(activeCategory);
+  }
+}
+
+function renderReportCards(category) {
+    const reports = REPORT_DEFINITIONS[category];
+    const gridEl = document.querySelector('.report-cards-grid');
+    if (!gridEl) return;
+
+    gridEl.innerHTML = reports.map(report => `
+        <div class="report-card" data-report-id="${report.id}">
+            <div class="report-card-icon">${report.icon}</div>
+            <div class="report-card-body">
+                <h4>${report.title}</h4>
+                <p>${report.description}</p>
+            </div>
+        </div>
+    `).join('');
+
+    // Add click handlers for the new cards
+    document.querySelectorAll('.report-card').forEach(card => {
+        card.onclick = () => {
+            const reportId = card.dataset.reportId;
+            renderReportFilterScreen(reportId);
+        };
+    });
+}
+
+function renderReportFilterScreen(reportId) {
+  // Find the report definition
+  let report = null;
+  for (const category in REPORT_DEFINITIONS) {
+    const found = REPORT_DEFINITIONS[category].find(r => r.id === reportId);
+    if (found) {
+      report = found;
+      break;
+    }
+  }
+
+  if (!report) {
+    view.innerHTML = `
+        <div class="card">
+            <h2>خطأ</h2>
+            <p>لم يتم العثور على التقرير المطلوب.</p>
+            <button class="btn" onclick="nav('reports')">العودة إلى التقارير</button>
+        </div>
+    `;
+    return;
+  }
+
+  view.innerHTML = `
     <div class="card">
-      <h3 style="margin-bottom:12px;">1. اختر نوع التقرير</h3>
-      <div class="grid grid-3" style="gap: 12px; margin-bottom: 16px;">
-        <div class="card">
-            <h4 style="margin-top:0; margin-bottom:8px; border-bottom:1px solid var(--line); padding-bottom:4px;">تقارير مالية</h4>
-            <div class="tools" style="flex-direction: column; gap: 8px; align-items: stretch;">
-                <button class="btn gold report-btn" data-type="payments_monthly">مدفوعات شهرية</button>
-                <button class="btn gold report-btn" data-type="cashflow">التدفقات النقدية العامة</button>
-            </div>
+        <div class="header">
+            <h3>فلترة تقرير: ${report.title}</h3>
+            <button class="btn secondary" onclick="nav('reports')">⬅️ العودة</button>
         </div>
-        <div class="card">
-            <h4 style="margin-top:0; margin-bottom:8px; border-bottom:1px solid var(--line); padding-bottom:4px;">تقارير الشركاء</h4>
-            <div class="tools" style="flex-direction: column; gap: 8px; align-items: stretch;">
-                <button class="btn gold report-btn" data-type="partner_summary">ملخص أرباح الشركاء</button>
-                <button class="btn gold report-btn" data-type="partner_profits">تفاصيل أرباح الشركاء</button>
-                <button class="btn gold report-btn" data-type="partner_cashflow">ملخص تدفقات الشركاء</button>
-            </div>
+        <div id="rep-filters-container" class="grid grid-4" style="gap:8px; align-items: end; margin: 16px 0;">
+            <!-- Filters will be dynamically inserted here -->
         </div>
-        <div class="card">
-            <h4 style="margin-top:0; margin-bottom:8px; border-bottom:1px solid var(--line); padding-bottom:4px;">تقارير المتابعة</h4>
-            <div class="tools" style="flex-direction: column; gap: 8px; align-items: stretch;">
-                <button class="btn gold report-btn" data-type="inst_due">كل الأقساط المستحقة</button>
-                <button class="btn gold report-btn" data-type="inst_overdue">الأقساط المتأخرة فقط</button>
-                <button class="btn gold report-btn" data-type="cust_activity">نشاط العملاء</button>
-                <button class="btn gold report-btn" data-type="units_status">حالة الوحدات</button>
-            </div>
+        <div class="tools">
+            <button class="btn" id="generate-report-btn" style="flex:1; padding: 12px; font-size: 16px;">إنشاء التقرير</button>
         </div>
-      </div>
-
-      <h3 style="margin-bottom:12px;">2. حدد الفلاتر (اختياري)</h3>
-      <div id="rep-filters-container" class="grid grid-4" style="gap:8px; align-items: end; margin-bottom: 16px;">
-        <!-- Filters will be dynamically inserted here -->
-      </div>
-
-      <div class="tools">
-        <button class="btn" id="generate-report-btn" style="flex:1; padding: 12px; font-size: 16px;">إنشاء التقرير</button>
-        <button class="btn secondary" id="reset-filters-btn" style="padding: 12px; font-size: 16px;">مسح الفلتر</button>
-      </div>
-      <hr>
-      <div id="rep-out"></div>
-    </div>`;
+        <hr>
+        <div id="rep-out"></div>
+    </div>
+  `;
 
   const filtersContainer = document.getElementById('rep-filters-container');
-  const generateBtn = document.getElementById('generate-report-btn');
-  const resetBtn = document.getElementById('reset-filters-btn');
 
-  generateBtn.onclick = () => {
-    if (!selectedReportType) {
-      return alert('الرجاء اختيار نوع التقرير أولاً.');
-    }
-    runReport(selectedReportType);
+  // Logic to add filters based on reportId
+  const needsDates = ['payments_monthly', 'cashflow', 'partner_profits', 'inst_due', 'inst_overdue', 'cust_activity', 'partner_cashflow', 'partner_summary'];
+  const needsPartner = ['partner_profits', 'partner_cashflow', 'partner_summary'];
+
+  if (needsDates.includes(reportId)) {
+    filtersContainer.innerHTML += `
+        <input type="date" class="input" id="rep-from" placeholder="من تاريخ">
+        <input type="date" class="input" id="rep-to" placeholder="إلى تاريخ">
+    `;
+  }
+  if (needsPartner.includes(reportId) && reportId !== 'partner_summary') {
+    filtersContainer.innerHTML += `
+      <select id="rep-partner-sel" class="select">
+          <option value="">اختر شريك...</option>
+          ${state.partners.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+      </select>
+    `;
+  }
+
+  // Attach listener to the generate button
+  document.getElementById('generate-report-btn').onclick = () => {
+    runReport(reportId);
   };
-
-  resetBtn.onclick = () => {
-    filtersContainer.querySelectorAll('input, select').forEach(el => {
-      el.value = '';
-    });
-    document.getElementById('rep-out').innerHTML = '';
-  };
-
-  document.querySelectorAll('.report-btn').forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll('.report-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      selectedReportType = btn.dataset.type;
-
-      // Dynamically render filters based on report type
-      filtersContainer.innerHTML = ''; // Clear previous
-      const needsDates = ['payments_monthly', 'cashflow', 'partner_profits', 'inst_due', 'inst_overdue', 'cust_activity', 'partner_cashflow', 'partner_summary'];
-      const needsPartner = ['partner_profits', 'partner_cashflow', 'partner_summary'];
-
-      if (needsDates.includes(selectedReportType)) {
-        filtersContainer.innerHTML += `
-            <input type="date" class="input" id="rep-from" placeholder="من تاريخ">
-            <input type="date" class="input" id="rep-to" placeholder="إلى تاريخ">
-        `;
-      }
-      if (needsPartner.includes(selectedReportType) && selectedReportType !== 'partner_summary') { // partner_summary is for all partners
-        filtersContainer.innerHTML += `
-          <select id="rep-partner-sel" class="select">
-              <option value="">اختر شريك...</option>
-              ${state.partners.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
-          </select>
-        `;
-      }
-    };
-  });
 }
 
 /* ===== ديون الشركاء ===== */
