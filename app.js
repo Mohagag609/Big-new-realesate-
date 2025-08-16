@@ -1524,11 +1524,6 @@ function renderContracts(){
     if (brokerAmt > 0 && !commissionSafeId) return alert('الرجاء تحديد الخزنة التي سيتم دفع العمولة منها.');
     if (down > 0 && !downPaymentSafeId) return alert('الرجاء تحديد الخزنة التي سيتم إيداع المقدم بها.');
 
-    const commissionSafe = state.safes.find(s => s.id === commissionSafeId);
-    if (brokerAmt > 0 && commissionSafe && commissionSafe.balance < brokerAmt) {
-      return alert(`رصيد خزنة العمولة "${commissionSafe.name}" غير كافٍ. الرصيد الحالي: ${egp(commissionSafe.balance)}`);
-    }
-
     saveState();
     const unitId=document.getElementById('ct-unit').value, customerId=document.getElementById('ct-cust').value;
     if(!unitId||!customerId) return alert('الرجاء اختيار الوحدة والعميل.');
