@@ -426,21 +426,20 @@ function generatePartnerLedger(partnerId) {
 function calculateKpis(filter = {}) {
   const { from, to } = filter;
   let contracts = state.contracts;
-  let payments = state.payments;
 
   if (from) {
     contracts = contracts.filter(c => c.start >= from);
-    payments = payments.filter(p => p.date >= from);
   }
   if (to) {
     contracts = contracts.filter(c => c.start <= to);
-    payments = payments.filter(p => p.date <= to);
   }
 
   const totalSales = contracts.reduce((sum, c) => sum + Number(c.totalPrice || 0), 0);
-  const downPayments = contracts.reduce((sum, c) => sum + Number(c.downPayment || 0), 0);
-  const otherPayments = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-  const totalReceipts = downPayments + otherPayments;
+
+  let allReceipts = state.vouchers.filter(v => v.type === 'receipt');
+  if (from) allReceipts = allReceipts.filter(v => v.date >= from);
+  if (to) allReceipts = allReceipts.filter(v => v.date <= to);
+  const totalReceipts = allReceipts.reduce((sum, v) => sum + Number(v.amount || 0), 0);
 
   const totalDebt = state.units.reduce((sum, u) => sum + calcRemaining(u), 0);
 
@@ -904,14 +903,15 @@ function calcRemaining(u){
 
   const totalOwed = (totalPrice - discount) + maintenance;
 
-  // The down payment is made at contract signing and is not part of the payments array.
-  // All other payments are in the payments array.
-  const downPayment = Number(ct.downPayment || 0);
-  const otherPayments = state.payments
-      .filter(p => p.unitId === u.id)
-      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const contractId = ct.id;
+  const unitInstallments = state.installments.filter(i => i.unitId === u.id).map(i => i.id);
 
-  const totalPaid = downPayment + otherPayments;
+  // Vouchers can be linked to the contract (down payment), installments, or the unit itself.
+  const relevantRefs = [contractId, u.id, ...unitInstallments];
+
+  const totalPaid = state.vouchers
+      .filter(v => v.type === 'receipt' && relevantRefs.includes(v.linked_ref))
+      .reduce((sum, v) => sum + Number(v.amount || 0), 0);
 
   const remaining = totalOwed - totalPaid;
 
@@ -1392,6 +1392,7 @@ function renderContracts(){
     const brokerP = parseNumber(document.getElementById('ct-brokerp').value);
     const brokerAmt = Math.round((total * brokerP / 100) * 100) / 100;
     const mainSafeId = document.getElementById('ct-main-safe').value;
+    const commissionSafeId = mainSafeId;
     const downPaymentSafeId = mainSafeId;
 
     if (down > 0 && !mainSafeId) return alert('الرجاء تحديد خزنة العقد لدفع المقدم.');
