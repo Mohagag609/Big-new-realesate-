@@ -1072,19 +1072,20 @@ function renderUnits(){
   <div class="grid">
     <div class="card">
       <h3>إضافة وحدة</h3>
-      <div class="grid grid-4">
+      <div class="grid grid-5">
         <input class="input" id="u-name" placeholder="اسم الوحدة">
         <input class="input" id="u-floor" placeholder="رقم الدور">
         <input class="input" id="u-building" placeholder="البرج/العمارة">
+        <input class="input" id="u-total-price" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="u-area" placeholder="المساحة (م²)">
         <select class="select" id="u-unit-type" onchange="toggleUnitTypeOther()">
             <option>سكني</option>
             <option>تجاري</option>
             <option value="other">أخرى...</option>
         </select>
-        <input class="input" id="u-unit-type-other" placeholder="ادخل نوع الوحدة" style="display:none;">
-        <input class="input" id="u-total-price" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <input class="input" id="u-area" placeholder="المساحة (م²)">
-        <select class="select" id="u-status"><option value="متاحة">متاحة</option><option value="محجوزة">محجوزة</option><option value="مباعة">مباعة</option><option value="مرتجعة">مرتجعة</option></select>
+        <input class="input" id="u-unit-type-other" placeholder="ادخل نوع الوحدة" style="display:none; grid-column: span 2;">
+        <select class="select" id="u-initial-partner" style="grid-column: span 2;"><option value="">اختر الشريك المالك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+        <input class="input" id="u-initial-percent" type="number" placeholder="نسبة الشريك المالك" value="100">
       </div>
       <textarea class="input" id="u-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
       <button class="btn" style="margin-top:10px;" onclick="addUnit()">حفظ</button>
@@ -1109,12 +1110,13 @@ function renderUnits(){
 
   window.addUnit=()=>{
     const name=document.getElementById('u-name').value.trim();
-    const status=document.getElementById('u-status').value;
     const area=document.getElementById('u-area').value.trim();
     const floor=document.getElementById('u-floor').value.trim();
     const building=document.getElementById('u-building').value.trim();
     const notes=document.getElementById('u-notes').value.trim();
     const totalPrice = parseNumber(document.getElementById('u-total-price').value);
+    const initialPartnerId = document.getElementById('u-initial-partner').value;
+    const initialPercent = parseNumber(document.getElementById('u-initial-percent').value);
 
     let unitType = document.getElementById('u-unit-type').value;
     if (unitType === 'other') {
@@ -1122,25 +1124,37 @@ function renderUnits(){
         if (!unitType) return alert('الرجاء إدخال نوع الوحدة المخصص.');
     }
 
+    if(!name || !floor || !building) return alert('الرجاء إدخال اسم الوحدة والدور والبرج.');
+    if(!totalPrice) return alert('الرجاء إدخال سعر الوحدة.');
+    if(!initialPartnerId) return alert('الرجاء اختيار شريك مالك للوحدة.');
+    if(!(initialPercent > 0 && initialPercent <= 100)) return alert('الرجاء إدخال نسبة صحيحة للشريك (بين 1 و 100).');
+
     const san_b = building.replace(/\s/g, '');
     const san_f = floor.replace(/\s/g, '');
     const san_n = name.replace(/\s/g, '');
     const code = `${san_b}-${san_f}-${san_n}`;
 
-    if(!name || !floor || !building) return alert('الرجاء إدخال اسم الوحدة والدور والبرج.');
-    if(!totalPrice) return alert('الرجاء إدخال سعر الوحدة.');
-
     if (state.units.some(u => u.code.toLowerCase() === code.toLowerCase())) {
         return alert('هذه الوحدة (نفس الاسم والدور والبرج) موجودة بالفعل.');
     }
+
     saveState();
+
+    // 1. Create the unit
     const newUnit = {
-      id:uid('U'), code, name, status, area, floor, building, notes, totalPrice, unitType
+      id:uid('U'), code, name, status: 'متاحة', area, floor, building, notes, totalPrice, unitType
     };
     logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code });
     state.units.push(newUnit);
+
+    // 2. Create the partner link
+    const link = {id: uid('UP'), unitId: newUnit.id, partnerId: initialPartnerId, percent: initialPercent};
+    logAction('ربط شريك بوحدة عند الإنشاء', { unitId: newUnit.id, partnerId: initialPartnerId, percent: initialPercent });
+    state.unitPartners.push(link);
+
     persist();
-    nav('unit-details', newUnit.id);
+    nav('units'); // Go back to the units list to see the new unit
+    alert('تم حفظ الوحدة وربط الشريك بنجاح.');
   };
 
   window.expUnits=()=>{
@@ -1408,7 +1422,7 @@ function renderUnitDetails(unitId){
     let warningHTML = '';
     if (links.length === 0) {
       warningHTML = `<div class="card warn" style="margin-bottom: 16px; background: var(--warn-light); border-color: var(--warn);">
-          <strong>تحذير:</strong> هذه الوحدة ليس لها شركاء. لن تتمكن من إنشاء عقد لها حتى يتم إضافة شريك واحد على الأقل بنسبة 100%.
+          <strong>تحذير:</strong> هذه الوحدة ليس لها شركاء. لن تتمكن من إنشاء <strong>عقد</strong> لها حتى يتم إضافة شريك واحد على الأقل بنسبة 100%.
       </div>`;
     }
 
