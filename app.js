@@ -307,6 +307,15 @@ function partnerById(id){ return state.partners.find(p=>p.id===id); }
 function brokerById(id){ return state.brokers.find(b=>b.id===id); }
 function unitCode(id){ return (unitById(id)||{}).code||'—'; }
 
+function getUnitDisplayName(unit) {
+    if (!unit) return '—';
+    const name = unit.name ? `اسم الوحدة (${unit.name})` : '';
+    const floor = unit.floor ? `رقم الدور (${unit.floor})` : '';
+    const building = unit.building ? `رقم العمارة (${unit.building})` : '';
+    // Filter out empty parts and join them
+    return [name, floor, building].filter(Boolean).join(' ');
+}
+
 
 function renderPartnerDetails(partnerId) {
     const partner = partnerById(partnerId);
@@ -325,7 +334,7 @@ function renderPartnerDetails(partnerId) {
     `;
 
     const unitsRows = ownedUnits.map(up => [
-        unitCode(up.unitId),
+        getUnitDisplayName(unitById(up.unitId)),
         `${up.percent} %`
     ]);
 
@@ -496,7 +505,7 @@ function exportDashboardExcel() {
     if (fromDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate >= fromDate);
     if (toDate) upcomingInstallments = upcomingInstallments.filter(i => i.dueDate <= toDate);
     const installmentData = upcomingInstallments.map(i => ({
-        'الوحدة': unitCode(i.unitId),
+        'الوحدة': getUnitDisplayName(unitById(i.unitId)),
         'العميل': (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name,
         'المبلغ': i.amount,
         'تاريخ الاستحقاق': i.dueDate
@@ -625,7 +634,7 @@ function renderDash() {
       const contract = state.contracts.find(c => c.unitId === i.unitId);
       const customer = contract ? custById(contract.customerId) : null;
       return [
-        unitCode(i.unitId),
+        getUnitDisplayName(unitById(i.unitId)),
         customer ? customer.name : '—',
         egp(i.amount),
         i.dueDate
@@ -807,8 +816,8 @@ function renderCustomers(){
     const notes = document.getElementById('c-notes').value.trim();
 
     if(!name || !phone) return alert('الرجاء إدخال الاسم ورقم الهاتف على الأقل.');
-    if(state.customers.some(c => c.name.toLowerCase() === name.toLowerCase() && c.phone === phone)) {
-      return alert('هذا العميل (نفس الاسم ورقم الهاتف) موجود بالفعل.');
+    if(state.customers.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+      return alert('عميل بنفس الاسم موجود بالفعل. الرجاء استخدام اسم مختلف.');
     }
 
     saveState();
@@ -1427,7 +1436,7 @@ function renderContracts(){
     if (q) {
         list = list.filter(c => {
             const customerName = (custById(c.customerId) || {}).name || '';
-            const unitName = unitCode(c.unitId);
+            const unitName = getUnitDisplayName(unitById(c.unitId));
             const searchable = `${c.code || ''} ${unitName} ${customerName} ${c.brokerName || ''}`.toLowerCase();
             return searchable.includes(q);
         });
@@ -1438,7 +1447,7 @@ function renderContracts(){
         const brokerNav = broker ? `nav('broker-details', '${broker.id}')` : `alert('لم يتم العثور على هذا السمسار في القائمة.')`;
         return [
             c.code,
-            unitCode(c.unitId),
+            getUnitDisplayName(unitById(c.unitId)),
             (custById(c.customerId)||{}).name||'—',
             c.brokerName ? `<a href="#" onclick="${brokerNav}; return false;">${c.brokerName}</a>` : '—',
             egp(c.totalPrice),
@@ -1544,7 +1553,7 @@ function renderContracts(){
     if (down > 0) {
         const downPaymentSafe = state.safes.find(s => s.id === downPaymentSafeId);
         downPaymentSafe.balance += down;
-        state.vouchers.push({id:uid('V'), type:'receipt', date:startStr, amount:down, safeId:downPaymentSafeId, description:`مقدم عقد للوحدة ${unitCode(unitId)}`, payer:customer?.name, linked_ref:ct.id});
+        state.vouchers.push({id:uid('V'), type:'receipt', date:startStr, amount:down, safeId:downPaymentSafeId, description:`مقدم عقد للوحدة ${getUnitDisplayName(unitById(unitId))}`, payer:customer?.name, linked_ref:ct.id});
         logAction('إنشاء سند قبض للمقدم', { contractId: ct.id, amount: down, safeId: downPaymentSafeId });
     }
     if (brokerAmt > 0) {
@@ -1631,7 +1640,7 @@ function renderContracts(){
     const headers = ['كود العقد','الوحدة','العميل','السعر','المقدم','الخصم','اسم السمسار','نسبة العمولة','مبلغ العمولة'];
     const rows = state.contracts.map(c => [
         c.code,
-        unitCode(c.unitId),
+        getUnitDisplayName(unitById(c.unitId)),
         (custById(c.customerId) || {}).name || '',
         c.totalPrice,
         c.downPayment,
@@ -1645,13 +1654,13 @@ function renderContracts(){
 
   window.printContracts=()=>{
     const headers = ['الكود','الوحدة','العميل','السعر','المقدم','نوع','عدد','بداية'];
-    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${unitCode(c.unitId)}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
+    const rows=state.contracts.map(c=>`<tr><td>${c.code||''}</td><td>${getUnitDisplayName(unitById(c.unitId))}</td><td>${(custById(c.customerId)||{}).name||'—'}</td><td>${egp(c.totalPrice)}</td><td>${egp(c.downPayment)}</td><td>${c.type}</td><td>${c.count}</td><td>${c.start}</td></tr>`).join('');
     printHTML('تقرير العقود', `<h1>تقرير العقود</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
 
   window.printContract=(ct)=>{
     const html=`<h1>عقد بيع — ${ct.code}</h1>
-      <p>الوحدة: ${unitCode(ct.unitId)} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
+      <p>الوحدة: ${getUnitDisplayName(unitById(ct.unitId))} — العميل: ${(custById(ct.customerId)||{}).name||'—'}</p>
       <table>
         <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount||0)}</td></tr>
@@ -1838,7 +1847,7 @@ function renderBrokerDetails(brokerId) {
             payButton = `مدفوعة بتاريخ ${d.paymentDate || 'غير مسجل'}`;
         }
         return [
-            contract ? unitCode(contract.unitId) : '—',
+            contract ? getUnitDisplayName(unitById(contract.unitId)) : '—',
             d.dueDate,
             egp(d.amount),
             d.status,
@@ -1895,7 +1904,7 @@ function renderInstallments(){
     if(q){
       list = list.filter(i => {
         const customerName = (custById(state.contracts.find(c => c.unitId === i.unitId)?.customerId) || {}).name || '';
-        const searchable = `${unitCode(i.unitId)} ${customerName} ${i.status||''} ${i.dueDate||''}`.toLowerCase();
+        const searchable = `${getUnitDisplayName(unitById(i.unitId))} ${customerName} ${i.status||''} ${i.dueDate||''}`.toLowerCase();
         return searchable.includes(q);
       });
     }
@@ -1912,8 +1921,8 @@ function renderInstallments(){
       const partnersA = state.unitPartners.filter(up => up.unitId === a.unitId).map(up => (partnerById(up.partnerId) || {}).name).join(', ');
       const partnersB = state.unitPartners.filter(up => up.unitId === b.unitId).map(up => (partnerById(up.partnerId) || {}).name).join(', ');
 
-      const A = [unitCode(a.unitId), customerA, partnersA, a.type || '', String(originalA), String(paidA), String(a.amount), a.dueDate || '', a.paymentDate || '', a.status || ''];
-      const B = [unitCode(b.unitId), customerB, partnersB, b.type || '', String(originalB), String(paidB), String(b.amount), b.dueDate || '', b.paymentDate || '', b.status || ''];
+      const A = [getUnitDisplayName(unitById(a.unitId)), customerA, partnersA, a.type || '', String(originalA), String(paidA), String(a.amount), a.dueDate || '', a.paymentDate || '', a.status || ''];
+      const B = [getUnitDisplayName(unitById(b.unitId)), customerB, partnersB, b.type || '', String(originalB), String(paidB), String(b.amount), b.dueDate || '', b.paymentDate || '', b.status || ''];
       return (A[sort.idx] + '').localeCompare(B[sort.idx] + '') * (sort.dir === 'asc' ? 1 : -1);
     });
 
@@ -1938,7 +1947,7 @@ function renderInstallments(){
       const partners = state.unitPartners.filter(up => up.unitId === i.unitId).map(up => `${(partnerById(up.partnerId) || {}).name} (${up.percent}%)`).join(', ');
 
       return `<tr class="${rowClass}">
-        <td>${unitCode(i.unitId)}</td>
+        <td>${getUnitDisplayName(unitById(i.unitId))}</td>
         <td>${customerName}</td>
         <td>${partners || '—'}</td>
         <td>${i.type || ''}</td>
@@ -1979,7 +1988,7 @@ function renderInstallments(){
     const rows=currentList.map(i=> {
         const originalAmount = i.originalAmount ?? i.amount;
         const paidAmount = originalAmount - i.amount;
-        return [unitCode(i.unitId), i.type, originalAmount, paidAmount, i.amount, i.dueDate||'', i.paymentDate||'', i.status||''];
+        return [getUnitDisplayName(unitById(i.unitId)), i.type, originalAmount, paidAmount, i.amount, i.dueDate||'', i.paymentDate||'', i.status||''];
     });
     exportCSV(headers, rows, 'installments.csv');
   };
@@ -1989,7 +1998,7 @@ function renderInstallments(){
       const paidAmount = originalAmount - i.amount;
       return `
       <tr>
-        <td>${unitCode(i.unitId)}</td>
+        <td>${getUnitDisplayName(unitById(i.unitId))}</td>
         <td>${i.type || ''}</td>
         <td>${egp(originalAmount)}</td>
         <td>${egp(paidAmount)}</td>
@@ -2119,7 +2128,7 @@ function processPayment(unitId, amount, method, date, safeId, installmentId = nu
         date: date,
         amount: amount,
         safeId: safeId,
-        description: `سداد دفعة للوحدة ${unitCode(unitId)}`,
+        description: `سداد دفعة للوحدة ${getUnitDisplayName(unitById(unitId))}`,
         payer: customer ? customer.name : 'غير محدد',
         linked_ref: installmentId || unitId
     };
@@ -2431,6 +2440,9 @@ function renderPartners(){
   window.addPartner=()=>{
     const name=document.getElementById('pr-name').value.trim(); if(!name) return;
     const phone = document.getElementById('pr-phone').value;
+    if (state.partners.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+        return alert('شريك بنفس الاسم موجود بالفعل. الرجاء استخدام اسم مختلف.');
+    }
     saveState();
     const newPartner = {id:uid('PR'),name,phone};
     logAction('إضافة شريك جديد', { partnerId: newPartner.id, name });
@@ -2541,7 +2553,7 @@ function showAddSafeModal() {
         const balance = parseNumber(document.getElementById('s-balance').value);
         if (!name) { alert('الرجاء إدخال اسم الخزنة.'); return false; }
         if (state.safes.some(s => s.name.toLowerCase() === name.toLowerCase())) {
-            alert('خزنة بنفس الاسم موجودة بالفعل.'); return false;
+            alert('خزنة بنفس الاسم موجودة بالفعل. الرجاء استخدام اسم مختلف.'); return false;
         }
         saveState();
         const newSafe = { id: uid('S'), name, balance };
@@ -2803,7 +2815,7 @@ function renderPartnerDebts(){
       list = list.filter(d => {
         const paying = partnerById(d.payingPartnerId)?.name || '';
         const owed = partnerById(d.owedPartnerId)?.name || '';
-        const unit = unitCode(d.unitId) || '';
+        const unit = getUnitDisplayName(unitById(d.unitId)) || '';
         const searchable = `${paying} ${owed} ${unit} ${d.status}`.toLowerCase();
         return searchable.includes(q);
       });
@@ -2812,12 +2824,12 @@ function renderPartnerDebts(){
     list.sort((a,b)=>{
       const pA = partnerById(a.payingPartnerId)?.name || '';
       const oA = partnerById(a.owedPartnerId)?.name || '';
-      const uA = unitCode(a.unitId);
+      const uA = getUnitDisplayName(unitById(a.unitId));
       const colsA = [pA, oA, uA, a.dueDate, a.amount, a.status];
 
       const pB = partnerById(b.payingPartnerId)?.name || '';
       const oB = partnerById(b.owedPartnerId)?.name || '';
-      const uB = unitCode(b.unitId);
+      const uB = getUnitDisplayName(unitById(b.unitId));
       const colsB = [pB, oB, uB, b.dueDate, b.amount, b.status];
 
       const valA = colsA[sort.idx];
@@ -2832,7 +2844,7 @@ function renderPartnerDebts(){
     const rows = list.map(d => {
       const paying = partnerById(d.payingPartnerId)?.name || 'محذوف';
       const owed = partnerById(d.owedPartnerId)?.name || 'محذوف';
-      const unit = unitCode(d.unitId);
+      const unit = getUnitDisplayName(unitById(d.unitId));
       const payButton = d.status !== 'مدفوع' ? `<button class="btn ok" onclick="payPartnerDebt('${d.id}')">تسجيل السداد</button>` : 'تم السداد';
       return [paying, owed, unit, d.dueDate, egp(d.amount), d.status, payButton];
     });
@@ -2894,7 +2906,7 @@ window.runReport=(type)=>{
       title='تقرير الأقساط المستحقة'; headers=['الوحدة','العميل','المبلغ','تاريخ الاستحقاق'];
       let inst=state.installments.filter(i=>i.status!=='مدفوع');
       if(from) inst=inst.filter(i=>i.dueDate>=from); if(to) inst=inst.filter(i=>i.dueDate<=to);
-      rows=inst.map(i=>[unitCode(i.unitId),(custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,egp(i.amount),i.dueDate]);
+      rows=inst.map(i=>[getUnitDisplayName(unitById(i.unitId)),(custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,egp(i.amount),i.dueDate]);
       break;
     case 'inst_overdue':
       title='تقرير الأقساط المتأخرة فقط';
@@ -2909,7 +2921,7 @@ window.runReport=(type)=>{
       rows = overdueInst.map(i => {
         const delay = Math.floor((today - new Date(i.dueDate)) / (1000 * 60 * 60 * 24));
         return [
-          unitCode(i.unitId),
+          getUnitDisplayName(unitById(i.unitId)),
           (custById(state.contracts.find(c=>c.unitId===i.unitId)?.customerId)||{}).name,
           egp(i.amount),
           i.dueDate,
@@ -3006,7 +3018,7 @@ window.runReport=(type)=>{
         const links=state.unitPartners.filter(up=>up.unitId===p.unitId && (!partnerIdForProfit || up.partnerId === partnerIdForProfit));
         links.forEach(l=>{
           const profit=Math.round((p.amount*l.percent/100)*100)/100;
-          rows.push([(partnerById(l.partnerId)||{}).name||'—',unitCode(p.unitId),egp(p.amount),l.percent+'%',egp(profit)]);
+          rows.push([(partnerById(l.partnerId)||{}).name||'—',getUnitDisplayName(unitById(p.unitId)),egp(p.amount),l.percent+'%',egp(profit)]);
         });
       });
       break;
@@ -3045,13 +3057,13 @@ window.runReport=(type)=>{
       let trans=[];
       let payFlow=state.payments.slice();
       if(from) payFlow=payFlow.filter(p=>p.date>=from); if(to) payFlow=payFlow.filter(p=>p.date<=to);
-      payFlow.forEach(p=>trans.push({d:p.date,n:`دفعة وحدة ${unitCode(p.unitId)}`,i:p.amount,o:0}));
+      payFlow.forEach(p=>trans.push({d:p.date,n:`دفعة وحدة ${getUnitDisplayName(unitById(p.unitId))}`,i:p.amount,o:0}));
 
       state.contracts.forEach(c=>{
         if(c.brokerAmount > 0) {
           const include = (!from || c.start >= from) && (!to || c.start <= to);
           if(include) {
-            trans.push({d:c.start, n:`عمولة سمسار ${unitCode(c.unitId)}`, i:0, o:c.brokerAmount});
+            trans.push({d:c.start, n:`عمولة سمسار ${getUnitDisplayName(unitById(c.unitId))}`, i:0, o:c.brokerAmount});
           }
         }
       });
@@ -3404,7 +3416,7 @@ window.payBrokerDue = function(dueId) {
             date: today(),
             amount: due.amount,
             safeId: safeId,
-            description: `صرف عمولة سمسار للوحدة ${unit ? unit.code : ''}`,
+            description: `صرف عمولة سمسار للوحدة ${getUnitDisplayName(unit)}`,
             beneficiary: due.brokerName,
             linked_ref: due.id
         };
@@ -3479,7 +3491,7 @@ window.openContractDetails = function(id) {
                     <h3>بيانات العقد</h3>
                     <table>
                         <tr><th>العميل</th><td>${customer?.name || '—'} (${customer?.phone || '—'})</td></tr>
-                        <tr><th>الوحدة</th><td>${unitCode(ct.unitId)} (${unit?.name || '—'})</td></tr>
+                        <tr><th>الوحدة</th><td>${getUnitDisplayName(unitById(ct.unitId))} (${unit?.name || '—'})</td></tr>
                         <tr style="font-weight: bold;"><th>إجمالي قيمة الشقة</th><td>${egp(ct.totalPrice)}</td></tr>
                         <tr><th>(-) وديعة الصيانة</th><td style="color:var(--warn);">${egp(ct.maintenanceDeposit || 0)}</td></tr>
                         <tr style="font-weight: bold;"><th>= المبلغ الخاضع للتقسيط</th><td>${egp((ct.totalPrice || 0) - (ct.maintenanceDeposit || 0))}</td></tr>
