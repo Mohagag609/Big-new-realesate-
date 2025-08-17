@@ -1104,7 +1104,7 @@ function renderUnits(){
     logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code });
     state.units.push(newUnit);
     persist();
-    draw();
+    nav('unit-details', newUnit.id);
   };
 
   window.expUnits=()=>{
