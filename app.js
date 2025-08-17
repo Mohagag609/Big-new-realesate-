@@ -220,6 +220,7 @@ const routes=[
   {id: 'broker-details', title: 'تفاصيل السمسار', render: renderBrokerDetails, tab: false},
   {id: 'partner-details', title: 'تفاصيل الشريك', render: renderPartnerDetails, tab: false},
   {id: 'customer-details', title: 'تفاصيل العميل', render: renderCustomerDetails, tab: false},
+  {id: 'unit-edit', title: 'تعديل الوحدة', render: renderUnitEdit, tab: false},
 ];
 const tabs=document.getElementById('tabs'), view=document.getElementById('view');
 routes.forEach(r=>{ if(r.tab){const b=document.createElement('button'); b.className='tab'; b.id='tab-'+r.id; b.textContent=r.title; b.onclick=()=>nav(r.id); tabs.appendChild(b);} });
@@ -1008,9 +1009,14 @@ function renderUnits(){
     list.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
 
     const rows=list.map(u=> {
-      let actions = `<button class="btn" onclick="nav('unit-details', '${u.id}')">إدارة</button>`;
-      if (u.status === 'مباعة') {
-        actions += ` <button class="btn gold" style="margin-right: 5px;" onclick="startReturnProcess('${u.id}')">إرجاع وشراء</button>`;
+      const isSold = u.status === 'مباعة';
+      let actions = `
+        <button class="btn" onclick="nav('unit-details', '${u.id}')" ${isSold ? 'disabled' : ''}>إدارة</button>
+        <button class="btn gold" onclick="nav('unit-edit', '${u.id}')" ${isSold ? 'disabled' : ''}>تعديل</button>
+        <button class="btn secondary" onclick="deleteUnit('${u.id}')">حذف</button>
+      `;
+      if (isSold) {
+        actions += ` <button class="btn" style="margin-right: 5px;" onclick="startReturnProcess('${u.id}')">إرجاع</button>`;
       }
       const partners = state.unitPartners.filter(up => up.unitId === u.id)
           .map(up => `${(partnerById(up.partnerId) || {}).name} (${up.percent}%)`)
@@ -1142,6 +1148,65 @@ function renderUnits(){
     printHTML('تقرير الوحدات', `<h1>تقرير الوحدات</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
   draw();
+}
+
+function renderUnitEdit(unitId) {
+    const unit = unitById(unitId);
+    if (!unit) {
+        return nav('units');
+    }
+
+    view.innerHTML = `
+    <div class="card">
+      <h3>تعديل الوحدة: ${getUnitDisplayName(unit)}</h3>
+      <div class="grid grid-4">
+        <input class="input" id="u-edit-name" placeholder="اسم الوحدة" value="${unit.name || ''}">
+        <input class="input" id="u-edit-floor" placeholder="رقم الدور" value="${unit.floor || ''}">
+        <input class="input" id="u-edit-building" placeholder="البرج/العمارة" value="${unit.building || ''}">
+        <input class="input" id="u-edit-total-price" placeholder="السعر الكلي" value="${unit.totalPrice || 0}" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="u-edit-area" placeholder="المساحة (م²)" value="${unit.area || ''}">
+        <select class="select" id="u-edit-status">
+            <option value="متاحة" ${unit.status === 'متاحة' ? 'selected' : ''}>متاحة</option>
+            <option value="محجوزة" ${unit.status === 'محجوزة' ? 'selected' : ''}>محجوزة</option>
+        </select>
+      </div>
+      <textarea class="input" id="u-edit-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2">${unit.notes || ''}</textarea>
+      <div class="tools" style="margin-top:10px;">
+        <button class="btn" onclick="updateUnit('${unit.id}')">حفظ التعديلات</button>
+        <button class="btn secondary" onclick="nav('units')">إلغاء</button>
+      </div>
+    </div>
+    `;
+
+    window.updateUnit = (id) => {
+        const u = unitById(id);
+        if (!u) return alert('لم يتم العثور على الوحدة.');
+
+        const name = document.getElementById('u-edit-name').value.trim();
+        const floor = document.getElementById('u-edit-floor').value.trim();
+        const building = document.getElementById('u-edit-building').value.trim();
+
+        if (!name || !floor || !building) {
+            return alert('الرجاء إدخال اسم الوحدة والدور والبرج.');
+        }
+
+        saveState();
+        u.name = name;
+        u.floor = floor;
+        u.building = building;
+        u.totalPrice = parseNumber(document.getElementById('u-edit-total-price').value);
+        u.area = document.getElementById('u-edit-area').value.trim();
+        u.status = document.getElementById('u-edit-status').value;
+        u.notes = document.getElementById('u-edit-notes').value.trim();
+
+        // Recalculate code in case building/floor/name changed
+        u.code = `${building.replace(/\s/g, '')}-${floor.replace(/\s/g, '')}-${name.replace(/\s/g, '')}`;
+
+        logAction('تعديل بيانات الوحدة', { unitId: id, updatedData: { name, floor, building, price: u.totalPrice } });
+        persist();
+        alert('تم حفظ التعديلات بنجاح.');
+        nav('units');
+    }
 }
 
 /* ===== إدارة الخزن ===== */
@@ -1308,7 +1373,15 @@ function renderUnitDetails(unitId){
     sumEl.className = 'badge ' + (sum > 100 ? 'warn' : (sum === 100 ? 'ok' : 'info'));
   }
 
+  let warningHTML = '';
+  if (links.length === 0) {
+    warningHTML = `<div class="card warn" style="margin-bottom: 16px; background: var(--warn-light); border-color: var(--warn);">
+        <strong>تحذير:</strong> هذه الوحدة ليس لها شركاء. لن تتمكن من إنشاء عقد لها حتى يتم إضافة شريك واحد على الأقل بنسبة 100%.
+    </div>`;
+  }
+
   view.innerHTML = `
+    ${warningHTML}
     <div class="card">
         <div class="header" style="justify-content: space-between;">
             <h1>إدارة الوحدة — ${u.code}</h1>
