@@ -1337,6 +1337,13 @@ function renderUnitDetails(unitId){
     const percent = parseNumber(document.getElementById('ud-pr-percent').value);
     if(!partnerId || !(percent > 0)) return alert('الرجاء اختيار شريك وإدخال نسبة صحيحة.');
     if(state.unitPartners.some(up => up.unitId === unitId && up.partnerId === partnerId)) return alert('هذا الشريك تم إضافته بالفعل لهذه الوحدة.');
+
+    const existingPartners = state.unitPartners.filter(up => up.unitId === unitId);
+    const currentTotalPercent = existingPartners.reduce((sum, p) => sum + Number(p.percent), 0);
+    if (currentTotalPercent + percent > 100) {
+        return alert(`خطأ: لا يمكن إضافة هذه النسبة. الإجمالي الحالي هو ${currentTotalPercent}%. إضافة ${percent}% سيجعل المجموع يتجاوز 100%.`);
+    }
+
     saveState();
     const link = {id: uid('UP'), unitId, partnerId, percent};
     logAction('ربط شريك بوحدة', { unitId, partnerId, percent });
