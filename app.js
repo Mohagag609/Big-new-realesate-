@@ -197,8 +197,60 @@ function checkLock(){
     }
   }
 }
+
+function updateUndoRedoButtons() {
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    if (undoBtn) undoBtn.disabled = historyIndex <= 0;
+    if (redoBtn) redoBtn.disabled = historyIndex >= historyStack.length - 1;
+}
+
+function undo() {
+    if (historyIndex > 0) {
+        historyIndex--;
+        const restoredState = JSON.parse(JSON.stringify(historyStack[historyIndex]));
+        Object.keys(state).forEach(key => delete state[key]);
+        Object.assign(state, restoredState);
+        persist();
+        nav(currentView, currentParam); // Re-render the current view with its parameter
+        updateUndoRedoButtons();
+    }
+}
+
+function redo() {
+    if (historyIndex < historyStack.length - 1) {
+        historyIndex++;
+        const restoredState = JSON.parse(JSON.stringify(historyStack[historyIndex]));
+        Object.keys(state).forEach(key => delete state[key]);
+        Object.assign(state, restoredState);
+        persist();
+        nav(currentView, currentParam); // Re-render the current view with its parameter
+        updateUndoRedoButtons();
+    }
+}
+
+function saveState() {
+    historyStack = historyStack.slice(0, historyIndex + 1);
+    historyStack.push(JSON.parse(JSON.stringify(state)));
+    if (historyStack.length > 50) {
+        historyStack.shift();
+    }
+    historyIndex = historyStack.length - 1;
+    updateUndoRedoButtons();
+}
+
+
 checkLock();
 saveState(); // Save the initial state
+
+document.addEventListener('DOMContentLoaded', () => {
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    if(undoBtn) undoBtn.onclick = undo;
+    if(redoBtn) redoBtn.onclick = redo;
+    updateUndoRedoButtons();
+});
+
 
 /* ===== تنقل ===== */
 let currentParam = null;
@@ -2109,7 +2161,7 @@ function renderInstallments() {
             const isExpanded = expandedGroups[g.unit.id];
             const summaryRow = `
                 <tr class="group-summary ${g.overdueCount > 0 ? 'overdue' : ''}" onclick="toggleGroup('${g.unit.id}')">
-                    <td><span class="expand-icon">${isExpanded ? '−' : '+'}</span> ${getUnitDisplayName(g.unit)}</td>
+                    <td><span class="expand-icon">${isExpanded ? '−' : '+'}</span> ${g.unit.code || getUnitDisplayName(g.unit)}</td>
                     <td>${g.customer?.name || '—'}</td>
                     <td colspan="3" style="text-align:center;">ملخص الوحدة</td>
                     <td><strong>${egp(g.totalRemaining)}</strong></td>
