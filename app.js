@@ -62,6 +62,7 @@ function load(){
       s.units.forEach(u => {
         u.area = u.area || '';
         u.notes = u.notes || '';
+        u.unitType = u.unitType || 'سكني'; // Add default unit type
         // Revert from plans array to single totalPrice
         if (u.plans && u.plans.length > 0) {
             u.totalPrice = u.plans[0].price;
@@ -998,36 +999,37 @@ function renderUnits(){
     let list=state.units.slice();
     if(q) {
       list=list.filter(u=> {
-        const searchable = `${u.code||''} ${u.name||''} ${u.floor||''} ${u.building||''} ${u.status||''} ${u.area||''}`.toLowerCase();
+        const searchable = `${u.code||''} ${u.name||''} ${u.floor||''} ${u.building||''} ${u.status||''} ${u.area||''} ${u.unitType||''}`.toLowerCase();
         return searchable.includes(q);
       });
     }
-    list.sort((a,b)=>{
-      const colsA=[a.code||'', a.name||'', String(a.totalPrice || 0), a.area||'', a.floor||'', a.building||'', a.status||''];
-      const colsB=[b.code||'', b.name||'', String(b.totalPrice || 0), b.area||'', b.floor||'', b.building||'', b.status||''];
-      return (colsA[sort.idx]+'').localeCompare(colsB[sort.idx]+'')*(sort.dir==='asc'?1:-1);
-    });
+    // New sorting logic will be needed here based on new columns
+    // For now, sorting by name
+    list.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+
     const rows=list.map(u=> {
       let actions = `<button class="btn" onclick="nav('unit-details', '${u.id}')">إدارة</button>`;
       if (u.status === 'مباعة') {
         actions += ` <button class="btn gold" style="margin-right: 5px;" onclick="startReturnProcess('${u.id}')">إرجاع وشراء</button>`;
       }
+      const partners = state.unitPartners.filter(up => up.unitId === u.id)
+          .map(up => `${(partnerById(up.partnerId) || {}).name} (${up.percent}%)`)
+          .join(', ');
+
       return [
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','code',this.textContent)">${u.code||''}</span>`,
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','name',this.textContent)">${u.name||''}</span>`,
-        `<span contenteditable="true" onblur="numEdit('units','${u.id}','totalPrice', this)">${egp(u.totalPrice)}</span>`,
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','area',this.textContent)">${u.area||''}</span>`,
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','floor',this.textContent)">${u.floor||''}</span>`,
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','building',this.textContent)">${u.building||''}</span>`,
+        u.name || '',
+        u.floor || '',
+        u.building || '',
+        u.unitType || 'سكني',
+        partners || '—',
+        egp(u.totalPrice),
         `<span>${egp(calcRemaining(u))}</span>`,
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','status',this.textContent)">${u.status||'متاحة'}</span>`,
-        `<span contenteditable="true" onblur="inlineUpd('units','${u.id}','notes',this.textContent)">${u.notes||''}</span>`,
+        u.status||'متاحة',
         `<div class="tools" style="gap:5px; flex-wrap:nowrap;">${actions}</div>`,
-        `<button class="btn secondary" onclick="deleteUnit('${u.id}')">حذف</button>`
       ];
     });
     document.getElementById('u-list').innerHTML=
-      table(['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','المتبقي','الحالة','ملاحظات','إجراءات',''], rows, sort, ns=>{sort=ns;draw();});
+      table(['اسم الوحدة','الدور','البرج','نوع الوحدة','الشركاء','السعر','المتبقي','الحالة','إجراءات'], rows);
   }
 
   view.innerHTML=`
@@ -1035,12 +1037,17 @@ function renderUnits(){
     <div class="card">
       <h3>إضافة وحدة</h3>
       <div class="grid grid-4">
-        <input class="input" id="u-code" placeholder="كود/اسم مختصر">
         <input class="input" id="u-name" placeholder="اسم الوحدة">
-        <input class="input" id="u-total-price" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
-        <input class="input" id="u-area" placeholder="المساحة (م²)">
         <input class="input" id="u-floor" placeholder="رقم الدور">
         <input class="input" id="u-building" placeholder="البرج/العمارة">
+        <select class="select" id="u-unit-type" onchange="toggleUnitTypeOther()">
+            <option>سكني</option>
+            <option>تجاري</option>
+            <option value="other">أخرى...</option>
+        </select>
+        <input class="input" id="u-unit-type-other" placeholder="ادخل نوع الوحدة" style="display:none;">
+        <input class="input" id="u-total-price" placeholder="السعر الكلي" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="u-area" placeholder="المساحة (م²)">
         <select class="select" id="u-status"><option value="متاحة">متاحة</option><option value="محجوزة">محجوزة</option><option value="مباعة">مباعة</option><option value="مرتجعة">مرتجعة</option></select>
       </div>
       <textarea class="input" id="u-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
@@ -1058,8 +1065,13 @@ function renderUnits(){
     </div>
   </div>`;
 
+  window.toggleUnitTypeOther = () => {
+    const typeSelect = document.getElementById('u-unit-type');
+    const otherInput = document.getElementById('u-unit-type-other');
+    otherInput.style.display = typeSelect.value === 'other' ? 'block' : 'none';
+  }
+
   window.addUnit=()=>{
-    let code=document.getElementById('u-code').value.trim();
     const name=document.getElementById('u-name').value.trim();
     const status=document.getElementById('u-status').value;
     const area=document.getElementById('u-area').value.trim();
@@ -1068,24 +1080,26 @@ function renderUnits(){
     const notes=document.getElementById('u-notes').value.trim();
     const totalPrice = parseNumber(document.getElementById('u-total-price').value);
 
-    if (!code) {
-        if (!building || !floor || !name) {
-            return alert('لإنشاء كود تلقائي، الرجاء إدخال اسم الوحدة ورقم الدور والبرج.');
-        }
-        const san_b = building.replace(/\s/g, '');
-        const san_f = floor.replace(/\s/g, '');
-        const san_n = name.replace(/\s/g, '');
-        code = `${san_b}-${san_f}-${san_n}`;
+    let unitType = document.getElementById('u-unit-type').value;
+    if (unitType === 'other') {
+        unitType = document.getElementById('u-unit-type-other').value.trim();
+        if (!unitType) return alert('الرجاء إدخال نوع الوحدة المخصص.');
     }
 
+    const san_b = building.replace(/\s/g, '');
+    const san_f = floor.replace(/\s/g, '');
+    const san_n = name.replace(/\s/g, '');
+    const code = `${san_b}-${san_f}-${san_n}`;
+
+    if(!name || !floor || !building) return alert('الرجاء إدخال اسم الوحدة والدور والبرج.');
     if(!totalPrice) return alert('الرجاء إدخال سعر الوحدة.');
 
     if (state.units.some(u => u.code.toLowerCase() === code.toLowerCase())) {
-        return alert('هذا الكود مستخدم بالفعل. الرجاء إدخال كود فريد.');
+        return alert('هذه الوحدة (نفس الاسم والدور والبرج) موجودة بالفعل.');
     }
     saveState();
     const newUnit = {
-      id:uid('U'), code, name, status, area, floor, building, notes, totalPrice
+      id:uid('U'), code, name, status, area, floor, building, notes, totalPrice, unitType
     };
     logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code });
     state.units.push(newUnit);
@@ -1094,9 +1108,12 @@ function renderUnits(){
   };
 
   window.expUnits=()=>{
-    const headers=['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','الحالة','المتبقي','ملاحظات'];
+    const headers=['اسم الوحدة','الدور','البرج','نوع الوحدة','الشركاء','السعر','المتبقي','الحالة','ملاحظات'];
     const rows=state.units.map(u=> {
-      return [u.code,u.name||'',u.totalPrice,u.area||'',u.floor||'',u.building||'',u.status,calcRemaining(u),u.notes||''];
+      const partners = state.unitPartners.filter(up => up.unitId === u.id)
+          .map(up => `${(partnerById(up.partnerId) || {}).name} (${up.percent}%)`)
+          .join(' | ');
+      return [u.name||'',u.floor||'',u.building||'',u.unitType||'',partners,u.totalPrice,calcRemaining(u),u.status,u.notes||''];
     });
     exportCSV(headers, rows, 'units.csv');
   };
@@ -1108,8 +1125,11 @@ function renderUnits(){
       saveState();
       const lines=String(r.result).split(/\r?\n/).slice(1);
       lines.forEach(line=>{
-        const [code,name,total,area,floor,building,status,notes]=line.split(',').map(x=>x?.replace(/^"|"$/g,'')||'');
-        if(code) state.units.push({id:uid('U'),code,name,totalPrice:parseNumber(total),status:status||'متاحة',area,floor,building,notes});
+        const [name,floor,building,unitType,partners,price,status,notes]=line.split(',').map(x=>x?.replace(/^"|"$/g,'')||'');
+        if(name&&floor&&building) {
+            const code = `${building.replace(/\s/g, '')}-${floor.replace(/\s/g, '')}-${name.replace(/\s/g, '')}`;
+            state.units.push({id:uid('U'),code,name,totalPrice:parseNumber(price),status:status||'متاحة',floor,building,notes,unitType});
+        }
       });
       persist(); draw();
     };
@@ -1117,8 +1137,8 @@ function renderUnits(){
   };
 
   window.printUnits=()=>{
-    const headers=['الكود','اسم الوحدة','السعر','المساحة','الدور','البرج','الحالة','المتبقي'];
-    const rows=state.units.map(u=>`<tr><td>${u.code}</td><td>${u.name||''}</td><td>${egp(u.totalPrice)}</td><td>${u.area||''}</td><td>${u.floor||''}</td><td>${u.building||''}</td><td>${u.status}</td><td>${egp(calcRemaining(u))}</td></tr>`).join('');
+    const headers=['اسم الوحدة','الدور','البرج','نوع الوحدة','السعر','المتبقي','الحالة'];
+    const rows=state.units.map(u=>`<tr><td>${u.name||''}</td><td>${u.floor||''}</td><td>${u.building||''}</td><td>${u.unitType||''}</td><td>${egp(u.totalPrice)}</td><td>${egp(calcRemaining(u))}</td><td>${u.status}</td></tr>`).join('');
     printHTML('تقرير الوحدات', `<h1>تقرير الوحدات</h1><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
   };
   draw();
@@ -3491,7 +3511,7 @@ window.openContractDetails = function(id) {
                     <h3>بيانات العقد</h3>
                     <table>
                         <tr><th>العميل</th><td>${customer?.name || '—'} (${customer?.phone || '—'})</td></tr>
-                        <tr><th>الوحدة</th><td>${getUnitDisplayName(unitById(ct.unitId))} (${unit?.name || '—'})</td></tr>
+                        <tr><th>الوحدة</th><td>${getUnitDisplayName(unitById(ct.unitId))}</td></tr>
                         <tr style="font-weight: bold;"><th>إجمالي قيمة الشقة</th><td>${egp(ct.totalPrice)}</td></tr>
                         <tr><th>(-) وديعة الصيانة</th><td style="color:var(--warn);">${egp(ct.maintenanceDeposit || 0)}</td></tr>
                         <tr style="font-weight: bold;"><th>= المبلغ الخاضع للتقسيط</th><td>${egp((ct.totalPrice || 0) - (ct.maintenanceDeposit || 0))}</td></tr>
