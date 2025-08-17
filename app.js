@@ -941,6 +941,36 @@ window.inlineUpd=(coll,id,key,val)=>{
     persist();
   }
 };
+
+window.updatePartnerPercent = (element, linkId, originalPercent) => {
+  const link = state.unitPartners.find(up => up.id === linkId);
+  if (!link) return;
+
+  const newPercent = parseNumber(element.textContent);
+  if (isNaN(newPercent) || newPercent <= 0) {
+    alert('الرجاء إدخال نسبة مئوية صحيحة.');
+    element.textContent = originalPercent; // Revert
+    return;
+  }
+
+  const otherPartners = state.unitPartners.filter(up => up.unitId === link.unitId && up.id !== linkId);
+  const otherPartnersTotal = otherPartners.reduce((sum, p) => sum + p.percent, 0);
+
+  if (otherPartnersTotal + newPercent > 100) {
+    alert(`لا يمكن حفظ هذه النسبة. مجموع نسب الشركاء الآخرين هو ${otherPartnersTotal}%. إضافة ${newPercent}% سيجعل المجموع يتجاوز 100%.`);
+    element.textContent = originalPercent; // Revert
+    return;
+  }
+
+  saveState();
+  link.percent = newPercent;
+  logAction('تعديل نسبة الشريك', { unitPartnerId: linkId, newPercent });
+  persist();
+  // Re-render the view to update the total percentage badge
+  nav('unit-details', link.unitId);
+  alert('تم تحديث النسبة بنجاح.');
+};
+
 window.delRow=(coll,id)=>{
   const nameMap = {
     customers: 'العميل',
@@ -1353,83 +1383,89 @@ window.numEdit=(coll,id,key,el)=>{ el.textContent = parseNumber(el.textContent||
 
 /* ===== تفاصيل الوحدة وإدارة الشركاء وخطط الأسعار ===== */
 function renderUnitDetails(unitId){
-  const u = unitById(unitId);
-  if(!u) return nav('units');
-  const links = state.unitPartners.filter(up => up.unitId === u.id);
+  try {
+    const u = unitById(unitId);
+    if(!u) return nav('units');
+    const links = state.unitPartners.filter(up => up.unitId === u.id);
 
-  function drawPartners(){
-    const rows = links.map(link => {
-      const partner = partnerById(link.partnerId);
-      return [
-        partner ? partner.name : 'شريك محذوف',
-        link.percent + ' %',
-        `<button class="btn secondary" onclick="removePartnerFromUnit('${link.id}')">حذف</button>`
-      ];
-    });
-    document.getElementById('ud-partners-list').innerHTML = table(['الشريك', 'النسبة', ''], rows);
-    const sum = links.reduce((s, p) => s + Number(p.percent || 0), 0);
-    const sumEl = document.getElementById('ud-partners-sum');
-    sumEl.textContent = sum + ' %';
-    sumEl.className = 'badge ' + (sum > 100 ? 'warn' : (sum === 100 ? 'ok' : 'info'));
-  }
-
-  let warningHTML = '';
-  if (links.length === 0) {
-    warningHTML = `<div class="card warn" style="margin-bottom: 16px; background: var(--warn-light); border-color: var(--warn);">
-        <strong>تحذير:</strong> هذه الوحدة ليس لها شركاء. لن تتمكن من إنشاء عقد لها حتى يتم إضافة شريك واحد على الأقل بنسبة 100%.
-    </div>`;
-  }
-
-  view.innerHTML = `
-    ${warningHTML}
-    <div class="card">
-        <div class="header" style="justify-content: space-between;">
-            <h1>إدارة الوحدة — ${u.code}</h1>
-            <button class="btn secondary" onclick="nav('units')">⬅️ العودة للوحدات</button>
-        </div>
-        <p><b>اسم الوحدة:</b> ${u.name||'—'} | <b>البرج:</b> ${u.building||'—'} | <b>الدور:</b> ${u.floor||'—'}</p>
-        <p><b>السعر:</b> ${egp(u.totalPrice)}</p>
-
-        <div class="card" style="margin-top:16px;">
-            <h3>الشركاء في هذه الوحدة</h3>
-            <div id="ud-partners-list"></div>
-            <hr>
-            <h4>إضافة شريك جديد</h4>
-            <div class="tools">
-                <select class="select" id="ud-pr-select" style="flex:1;"><option value="">اختر شريك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
-                <input class="input" id="ud-pr-percent" type="number" min="0.1" max="100" step="0.1" placeholder="النسبة %" style="flex:0.5;">
-                <button class="btn" onclick="addPartnerToUnit('${u.id}')">إضافة</button>
-                <span class="badge" id="ud-partners-sum">0 %</span>
-            </div>
-        </div>
-    </div>
-  `;
-
-  window.addPartnerToUnit = (unitId) => {
-    const partnerId = document.getElementById('ud-pr-select').value;
-    const percent = parseNumber(document.getElementById('ud-pr-percent').value);
-    if(!partnerId || !(percent > 0)) return alert('الرجاء اختيار شريك وإدخال نسبة صحيحة.');
-    if(state.unitPartners.some(up => up.unitId === unitId && up.partnerId === partnerId)) return alert('هذا الشريك تم إضافته بالفعل لهذه الوحدة.');
-
-    const existingPartners = state.unitPartners.filter(up => up.unitId === unitId);
-    const currentTotalPercent = existingPartners.reduce((sum, p) => sum + Number(p.percent), 0);
-    if (currentTotalPercent + percent > 100) {
-        return alert(`خطأ: لا يمكن إضافة هذه النسبة. الإجمالي الحالي هو ${currentTotalPercent}%. إضافة ${percent}% سيجعل المجموع يتجاوز 100%.`);
+    function drawPartners(){
+      const rows = links.map(link => {
+        const partner = partnerById(link.partnerId);
+      const originalPercent = link.percent;
+        return [
+          partner ? partner.name : 'شريك محذوف',
+        `<span contenteditable="true" onblur="updatePartnerPercent(this, '${link.id}', ${originalPercent})">${link.percent}</span> %`,
+          `<button class="btn secondary" onclick="removePartnerFromUnit('${link.id}')">حذف</button>`
+        ];
+      });
+      document.getElementById('ud-partners-list').innerHTML = table(['الشريك', 'النسبة', ''], rows);
+      const sum = links.reduce((s, p) => s + Number(p.percent || 0), 0);
+      const sumEl = document.getElementById('ud-partners-sum');
+      sumEl.textContent = sum + ' %';
+      sumEl.className = 'badge ' + (sum > 100 ? 'warn' : (sum === 100 ? 'ok' : 'info'));
     }
 
-    saveState();
-    const link = {id: uid('UP'), unitId, partnerId, percent};
-    logAction('ربط شريك بوحدة', { unitId, partnerId, percent });
-    state.unitPartners.push(link);
-    persist();
+    let warningHTML = '';
+    if (links.length === 0) {
+      warningHTML = `<div class="card warn" style="margin-bottom: 16px; background: var(--warn-light); border-color: var(--warn);">
+          <strong>تحذير:</strong> هذه الوحدة ليس لها شركاء. لن تتمكن من إنشاء عقد لها حتى يتم إضافة شريك واحد على الأقل بنسبة 100%.
+      </div>`;
+    }
+
+    view.innerHTML = `
+      ${warningHTML}
+      <div class="card">
+          <div class="header" style="justify-content: space-between;">
+              <h1>إدارة الوحدة — ${u.code}</h1>
+              <button class="btn secondary" onclick="nav('units')">⬅️ العودة للوحدات</button>
+          </div>
+          <p><b>اسم الوحدة:</b> ${u.name||'—'} | <b>البرج:</b> ${u.building||'—'} | <b>الدور:</b> ${u.floor||'—'}</p>
+          <p><b>السعر:</b> ${egp(u.totalPrice)}</p>
+
+          <div class="card" style="margin-top:16px;">
+              <h3>الشركاء في هذه الوحدة</h3>
+              <div id="ud-partners-list"></div>
+              <hr>
+              <h4>إضافة شريك جديد</h4>
+              <div class="tools">
+                  <select class="select" id="ud-pr-select" style="flex:1;"><option value="">اختر شريك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+                  <input class="input" id="ud-pr-percent" type="number" min="0.1" max="100" step="0.1" placeholder="النسبة %" style="flex:0.5;">
+                  <button class="btn" onclick="addPartnerToUnit('${u.id}')">إضافة</button>
+                  <span class="badge" id="ud-partners-sum">0 %</span>
+              </div>
+          </div>
+      </div>
+    `;
+
+    window.addPartnerToUnit = (unitId) => {
+      const partnerId = document.getElementById('ud-pr-select').value;
+      const percent = parseNumber(document.getElementById('ud-pr-percent').value);
+      if(!partnerId || !(percent > 0)) return alert('الرجاء اختيار شريك وإدخال نسبة صحيحة.');
+      if(state.unitPartners.some(up => up.unitId === unitId && up.partnerId === partnerId)) return alert('هذا الشريك تم إضافته بالفعل لهذه الوحدة.');
+
+      const existingPartners = state.unitPartners.filter(up => up.unitId === unitId);
+      const currentTotalPercent = existingPartners.reduce((sum, p) => sum + Number(p.percent), 0);
+      if (currentTotalPercent + percent > 100) {
+          return alert(`خطأ: لا يمكن إضافة هذه النسبة. الإجمالي الحالي هو ${currentTotalPercent}%. إضافة ${percent}% سيجعل المجموع يتجاوز 100%.`);
+      }
+
+      saveState();
+      const link = {id: uid('UP'), unitId, partnerId, percent};
+      logAction('ربط شريك بوحدة', { unitId, partnerId, percent });
+      state.unitPartners.push(link);
+      persist();
+      drawPartners();
+    };
+
+    window.removePartnerFromUnit = (linkId) => {
+      delRow('unitPartners', linkId);
+    };
+
     drawPartners();
-  };
-
-  window.removePartnerFromUnit = (linkId) => {
-    delRow('unitPartners', linkId);
-  };
-
-  drawPartners();
+  } catch (err) {
+    alert('حدث خطأ أثناء عرض تفاصيل الوحدة. الرجاء إبلاغ المطور بالتفاصيل التالية:\n\n' + err.stack);
+    console.error("Error in renderUnitDetails:", err);
+  }
 }
 
 function deleteContract(contractId) {
