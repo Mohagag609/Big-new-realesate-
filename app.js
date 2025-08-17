@@ -3429,12 +3429,29 @@ window.openContractDetails = function(id) {
     const unit = unitById(ct.unitId);
     const customer = custById(ct.customerId);
 
-    const insts = state.installments.filter(i => i.unitId === ct.unitId).sort((a,b) => (a.dueDate||'').localeCompare(b.dueDate||''));
-    const instRows = insts.map(i => {
-      const paidSoFar = state.payments.filter(p => p.installmentId === i.id).reduce((sum, p) => sum + (p.amount || 0), 0);
+    // Calculations for new summary cards
+    const allInstallments = state.installments.filter(i => i.unitId === ct.unitId);
+    const installmentIds = new Set(allInstallments.map(i => i.id));
+
+    const totalPaid = state.vouchers
+        .filter(v => v.type === 'receipt' && (v.linked_ref === ct.id || installmentIds.has(v.linked_ref)))
+        .reduce((sum, v) => sum + v.amount, 0);
+
+    const remainingInstallments = allInstallments.filter(i => i.status !== 'مدفوع');
+    const remainingRegular = remainingInstallments
+        .filter(i => i.type !== 'دفعة صيانة')
+        .reduce((sum, i) => sum + i.amount, 0);
+    const remainingMaintenance = remainingInstallments
+        .find(i => i.type === 'دفعة صيانة')?.amount || 0;
+    const totalDebt = remainingRegular + remainingMaintenance;
+
+    // HTML for tables
+    const instRows = allInstallments.sort((a,b) => (a.dueDate||'').localeCompare(b.dueDate||'')).map(i => {
+      const originalAmount = i.originalAmount ?? i.amount;
+      const paidSoFar = originalAmount - i.amount;
       return `<tr>
         <td>${i.type || ''}</td>
-        <td>${egp(i.originalAmount ?? i.amount)}</td>
+        <td>${egp(originalAmount)}</td>
         <td>${egp(i.amount)}</td>
         <td>${egp(paidSoFar)}</td>
         <td>${i.dueDate || ''}</td>
@@ -3443,23 +3460,13 @@ window.openContractDetails = function(id) {
       </tr>`;
     }).join('');
 
-    const pays = state.vouchers.filter(v => v.type === 'receipt' && v.linked_ref === ct.id);
+    const pays = state.vouchers.filter(v => v.type === 'receipt' && (v.linked_ref === ct.id || installmentIds.has(v.linked_ref)));
     const payRows = pays.map(p => `<tr>
         <td>${egp(p.amount)}</td>
         <td>${p.description||'—'}</td>
         <td>${p.date||'—'}</td>
         <td>${(state.safes.find(s=>s.id===p.safeId)||{}).name||'—'}</td>
       </tr>`).join('');
-
-    const brokerDue = state.brokerDues.find(d => d.contractId === ct.id);
-    let commissionStatus = 'لا يوجد';
-    if(brokerDue) {
-        if(brokerDue.status === 'paid') {
-            commissionStatus = `<span class="ok">مدفوعة بتاريخ ${brokerDue.paymentDate}</span>`;
-        } else {
-            commissionStatus = `<span class="warn">مستحقة</span>`;
-        }
-    }
 
     const html = `
         <div class="card">
@@ -3473,10 +3480,11 @@ window.openContractDetails = function(id) {
                     <table>
                         <tr><th>العميل</th><td>${customer?.name || '—'} (${customer?.phone || '—'})</td></tr>
                         <tr><th>الوحدة</th><td>${unitCode(ct.unitId)} (${unit?.name || '—'})</td></tr>
-                        <tr><th>السعر الكلي</th><td>${egp(ct.totalPrice)}</td></tr>
+                        <tr style="font-weight: bold;"><th>إجمالي قيمة الشقة</th><td>${egp(ct.totalPrice)}</td></tr>
+                        <tr><th>(-) وديعة الصيانة</th><td style="color:var(--warn);">${egp(ct.maintenanceDeposit || 0)}</td></tr>
+                        <tr style="font-weight: bold;"><th>= المبلغ الخاضع للتقسيط</th><td>${egp((ct.totalPrice || 0) - (ct.maintenanceDeposit || 0))}</td></tr>
                         <tr><th>الخصم</th><td style="color:var(--ok);">${egp(ct.discountAmount || 0)}</td></tr>
                         <tr><th>المقدم</th><td>${egp(ct.downPayment)}</td></tr>
-                        <tr><th>وديعة الصيانة</th><td>${egp(ct.maintenanceDeposit || 0)}</td></tr>
                         <tr><th>نظام الأقساط</th><td>${ct.type} × ${ct.count} + ${ct.extraAnnual} سنوية</td></tr>
                         <tr><th>تاريخ البدء</th><td>${ct.start}</td></tr>
                     </table>
@@ -3484,9 +3492,10 @@ window.openContractDetails = function(id) {
                 <div class="card">
                     <h3>ملخص مالي للوحدة</h3>
                     <table>
-                      <tr><th>إجمالي المتبقي من سعر الوحدة</th><td style="font-weight:bold">${egp(calcRemaining(unit))}</td></tr>
-                      <tr><th>إجمالي الأقساط المتبقية</th><td>${egp(insts.reduce((s,i)=>s+(i.amount||0),0))}</td></tr>
-                      <tr><th>إجمالي المدفوعات المسجلة</th><td>${egp(pays.reduce((s,p)=>s+(p.amount||0),0))}</td></tr>
+                        <tr><th>الأقساط العادية المتبقية</th><td>${egp(remainingRegular)}</td></tr>
+                        <tr><th>(+) وديعة الصيانة المتبقية</th><td>${egp(remainingMaintenance)}</td></tr>
+                        <tr style="font-weight:bold; border-top: 1px solid var(--border);"><th>= إجمالي المديونية الحالية</th><td>${egp(totalDebt)}</td></tr>
+                        <tr style="font-weight:bold;"><th>إجمالي المبالغ المدفوعة</th><td style="color:var(--ok);">${egp(totalPaid)}</td></tr>
                     </table>
                 </div>
             </div>
