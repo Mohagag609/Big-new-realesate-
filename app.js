@@ -1013,7 +1013,7 @@ function renderUnits(){
       let actions = `
         <button class="btn" onclick="nav('unit-details', '${u.id}')" ${isSold ? 'disabled' : ''}>إدارة</button>
         <button class="btn gold" onclick="nav('unit-edit', '${u.id}')" ${isSold ? 'disabled' : ''}>تعديل</button>
-        <button class="btn secondary" onclick="deleteUnit('${u.id}')">حذف</button>
+        <button class="btn secondary" onclick="deleteUnit('${u.id}')" ${isSold ? 'disabled' : ''}>حذف</button>
       `;
       if (isSold) {
         actions += ` <button class="btn" style="margin-right: 5px;" onclick="startReturnProcess('${u.id}')">إرجاع</button>`;
@@ -1355,9 +1355,9 @@ window.numEdit=(coll,id,key,el)=>{ el.textContent = parseNumber(el.textContent||
 function renderUnitDetails(unitId){
   const u = unitById(unitId);
   if(!u) return nav('units');
+  const links = state.unitPartners.filter(up => up.unitId === u.id);
 
   function drawPartners(){
-    const links = state.unitPartners.filter(up => up.unitId === u.id);
     const rows = links.map(link => {
       const partner = partnerById(link.partnerId);
       return [
