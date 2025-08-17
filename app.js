@@ -177,7 +177,7 @@ function logAction(description, details = {}) {
         details
     });
 }
-const fmt = new Intl.NumberFormat('ar-EG'); function egp(v){ v=Number(v||0); return isFinite(v)?fmt.format(v)+' ج.م':'' }
+const fmt = new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); function egp(v){ v=Number(v||0); return isFinite(v)?fmt.format(v)+' ج.م':'' }
 function applySettings(){ document.documentElement.setAttribute('data-theme', state.settings.theme||'dark'); document.documentElement.style.fontSize=(state.settings.font||16)+'px'; }
 applySettings();
 document.getElementById('themeSel').value=state.settings.theme||'dark';
@@ -1330,7 +1330,7 @@ function renderSafes(){
       <div class="card">
           <h3>إضافة خزنة جديدة</h3>
           <input class="input" id="s-name" placeholder="اسم الخزنة (مثلاً: الخزنة الرئيسية، حساب البنك)">
-          <input class="input" id="s-balance" placeholder="الرصيد الافتتاحي" type="number" value="0" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+          <input class="input" id="s-balance" placeholder="الرصيد الافتتاحي" type="text" value="0">
           <button class="btn" style="margin-top:10px;" onclick="addSafe()">إضافة</button>
       </div>
       <div class="card">
@@ -2891,7 +2891,7 @@ function renderTreasury() {
 function showAddSafeModal() {
     const content = `
         <input class="input" id="s-name" placeholder="اسم الخزنة (مثلاً: الخزنة الرئيسية، حساب البنك)">
-        <input class="input" id="s-balance" placeholder="الرصيد الافتتاحي" type="number" value="0" oninput="this.value=this.value.replace(/[^\\d.]/g,'')">
+        <input class="input" id="s-balance" placeholder="الرصيد الافتتاحي" type="text" value="0">
     `;
     showModal('إضافة خزنة جديدة', content, () => {
         const name = document.getElementById('s-name').value.trim();
