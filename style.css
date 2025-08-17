@@ -89,6 +89,25 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .overdue td{background:rgba(239,68,68,.15) !important}
 .due-soon td{background:rgba(245, 158, 11, .1) !important}
 .paid td{opacity:.6}
+.group-summary {
+  cursor: pointer;
+  background: var(--panel);
+  font-weight: bold;
+}
+.group-summary:hover {
+  background: var(--card);
+}
+.installment-detail td:first-child {
+  padding-right: 32px;
+}
+.expand-icon {
+  display: inline-block;
+  width: 20px;
+  text-align: center;
+  font-family: monospace;
+  font-size: 16px;
+  color: var(--muted);
+}
 [contenteditable=true]{outline:1px dashed transparent;border-radius:6px}
 [contenteditable=true]:focus{outline:1px dashed var(--brand);background:rgba(37,99,235,.08)}
 @media print{
