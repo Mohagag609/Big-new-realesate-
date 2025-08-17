@@ -1,0 +1,22 @@
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "description": "Electron app with an Express backend and SQLite database.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-packager . MyApp --platform=win32 --arch=x64 --out=dist --overwrite"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "electron": "^28.2.0",
+    "electron-packager": "^17.1.2"
+  }
+}
