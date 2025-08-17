@@ -2111,8 +2111,9 @@ function renderInstallments() {
                 <tr class="group-summary ${g.overdueCount > 0 ? 'overdue' : ''}" onclick="toggleGroup('${g.unit.id}')">
                     <td><span class="expand-icon">${isExpanded ? '−' : '+'}</span> ${getUnitDisplayName(g.unit)}</td>
                     <td>${g.customer?.name || '—'}</td>
-                    <td colspan="3"><strong>${egp(g.totalRemaining)}</strong></td>
-                    <td colspan="2"><span class="badge ${g.overdueCount > 0 ? 'warn' : 'ok'}">${g.overdueCount} متأخر / ${g.installments.length} إجمالي</span></td>
+                    <td colspan="3" style="text-align:center;">ملخص الوحدة</td>
+                    <td><strong>${egp(g.totalRemaining)}</strong></td>
+                    <td><span class="badge ${g.overdueCount > 0 ? 'warn' : 'ok'}">${g.installments.length} أقساط</span></td>
                 </tr>
             `;
 
@@ -2132,6 +2133,7 @@ function renderInstallments() {
                         <td>${i.dueDate || ''}</td>
                         <td>
                             <button class="btn ok" onclick="payInstallment('${i.id}')" ${isPaid ? 'disabled' : ''}>دفع</button>
+                            <button class="btn" onclick="rescheduleInstallment('${i.id}')" ${isPaid ? 'disabled' : ''}>إعادة جدولة</button>
                             <button class="btn secondary" onclick="delRow('installments','${i.id}')" ${isPaid ? 'disabled' : ''}>حذف</button>
                         </td>
                     </tr>
@@ -2153,6 +2155,50 @@ function renderInstallments() {
         document.getElementById('i-from').value = '';
         document.getElementById('i-to').value = '';
         drawTable();
+    };
+
+    window.rescheduleInstallment = function(id){
+      const i = state.installments.find(x=>x.id===id); if(!i) return;
+      const oldDetails = { amount: i.amount, dueDate: i.dueDate };
+
+      const newAmtStr = prompt('قيمة القسط الجديدة', i.amount);
+      if (newAmtStr === null) return;
+      const newAmt = parseNumber(newAmtStr);
+
+      const newDate = prompt('تاريخ الاستحقاق الجديد (YYYY-MM-DD)', i.dueDate || '');
+      if (newDate === null) return;
+
+      if (newAmt === oldDetails.amount && newDate === oldDetails.dueDate) return;
+
+      saveState();
+      const unitId = i.unitId;
+      const remainList = state.installments
+        .filter(x=>x.unitId===unitId && x.status!=='مدفوع')
+        .sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''));
+
+      const idx = remainList.findIndex(x=>x.id===id);
+      const diff = Math.round((i.amount - newAmt) * 100) / 100;
+
+      if (typeof i.originalAmount !== 'number') i.originalAmount = i.amount;
+      i.amount = newAmt;
+      i.dueDate = newDate;
+
+      const others = remainList.slice(idx+1);
+      if (others.length > 0 && diff !== 0) {
+          const share = Math.round((diff / others.length) * 100) / 100;
+          others.forEach(x=>{
+            if (typeof x.originalAmount !== 'number') x.originalAmount = x.amount;
+            x.amount = Math.round((x.amount + share) * 100) / 100;
+          });
+          logAction('إعادة جدولة قسط وتوزيع الفرق', { installmentId: id, oldDetails, newAmount: newAmt, newDueDate: newDate, distributedDiff: diff });
+          alert('تمت إعادة الجدولة وتوزيع الفرق على الأقساط التالية.');
+      } else {
+           logAction('إعادة جدولة قسط', { installmentId: id, oldDetails, newAmount: newAmt, newDueDate: newDate });
+           alert('تمت إعادة جدولة القسط.');
+      }
+
+      persist();
+      drawTable();
     };
 
     // Make functions available in the global scope for onclick handlers
