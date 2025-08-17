@@ -212,7 +212,7 @@ const routes=[
   {id:'installments',title:'الأقساط',render:renderInstallments, tab: true},
   {id:'vouchers',title:'السندات',render:renderVouchers, tab: true},
   {id:'partners',title:'الشركاء',render:renderPartners, tab: true},
-  {id:'partner-groups', title:'مجموعات الشركاء', render:renderPartnerGroups, tab: true},
+  // {id:'partner-groups', title:'مجموعات الشركاء', render:renderPartnerGroups, tab: true}, // Merged into Partners
   {id:'treasury',title:'الخزينة',render:renderTreasury, tab: true},
   {id:'reports',title:'التقارير',render:renderReports, tab: true},
   {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: false}, // Merged into Partners screen
@@ -2519,10 +2519,20 @@ function renderPartners(){
   let partnersList = [];
   let debtsList = [];
 
+  function draw() {
+    if (activeTab === 'partners') drawPartnersTab();
+    else if (activeTab === 'groups') drawGroupsTab();
+    else drawDebtsTab();
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === activeTab);
+    });
+  }
+
   view.innerHTML = `
     <div class="card">
       <div class="tabs">
         <button class="tab-btn active" data-tab="partners">الشركاء</button>
+        <button class="tab-btn" data-tab="groups">مجموعات الشركاء</button>
         <button class="tab-btn" data-tab="debts">ديون الشركاء</button>
       </div>
       <div id="partners-content" style="padding-top: 16px;"></div>
@@ -2547,7 +2557,7 @@ function renderPartners(){
         <div>
           <h3>قائمة الشركاء</h3>
           <div class="tools">
-             <input class="input" id="pr-q" placeholder="بحث بالاسم أو الهاتف..." oninput="drawPartnersTab()" value="${q}">
+             <input class="input" id="pr-q" placeholder="بحث بالاسم أو الهاتف..." oninput="drawPartnersTab()" value="${q || ''}">
              <button class="btn secondary" onclick="expPartners()">تصدير CSV</button>
           </div>
           <div id="pr-list"></div>
@@ -2560,6 +2570,38 @@ function renderPartners(){
         `<button class="btn secondary" onclick="delRow('partners','${p.id}')">حذف</button>`
     ]);
     document.getElementById('pr-list').innerHTML = table(['الاسم', 'الهاتف', ''], prRows);
+  }
+
+  function drawGroupsTab() {
+      const rows = state.partnerGroups.map(g => {
+        const totalPercent = g.partners.reduce((sum, p) => sum + p.percent, 0);
+        const partners = g.partners.map(p => {
+          const partner = partnerById(p.partnerId);
+          return `${partner ? partner.name : 'محذوف'} (${p.percent}%)`;
+        }).join(', ');
+        return [
+          `<a href="#" onclick="nav('partner-group-details', '${g.id}')">${g.name}</a>`,
+          partners,
+          `<span class="badge ${totalPercent === 100 ? 'ok' : 'warn'}">${totalPercent}%</span>`,
+          `<button class="btn secondary" onclick="delRow('partnerGroups', '${g.id}')">حذف</button>`
+        ];
+      });
+
+      document.getElementById('partners-content').innerHTML = `
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>إضافة مجموعة شركاء</h3>
+            <input class="input" id="pg-name" placeholder="اسم المجموعة (مثال: مستثمرو المرحلة الأولى)">
+            <button class="btn" style="margin-top:10px;" onclick="addGroup()">إضافة وبدء الإدارة</button>
+          </div>
+          <div class="card">
+            <h3>قائمة المجموعات</h3>
+            <div id="pg-list">
+              ${table(['اسم المجموعة', 'الشركاء', 'إجمالي النسبة', ''], rows)}
+            </div>
+          </div>
+        </div>
+      `;
   }
 
   function drawDebtsTab() {
@@ -2578,7 +2620,7 @@ function renderPartners(){
     document.getElementById('partners-content').innerHTML = `
         <h3>ديون الشركاء</h3>
         <div class="tools">
-            <input class="input" id="pd-q" placeholder="بحث..." oninput="drawDebtsTab()" value="${q}">
+            <input class="input" id="pd-q" placeholder="بحث..." oninput="drawDebtsTab()" value="${q || ''}">
             <button class="btn secondary" onclick="expPartnerDebts()">تصدير CSV</button>
         </div>
         <div id="pd-list"></div>
@@ -2607,7 +2649,21 @@ function renderPartners(){
     logAction('إضافة شريك جديد', { partnerId: newPartner.id, name });
     state.partners.push(newPartner);
     persist();
-    nav('partners');
+    draw();
+  };
+
+  window.addGroup = () => {
+    const name = document.getElementById('pg-name').value.trim();
+    if (!name) return alert('الرجاء إدخال اسم للمجموعة.');
+    if (state.partnerGroups.some(g => g.name.toLowerCase() === name.toLowerCase())) {
+      return alert('مجموعة بنفس الاسم موجودة بالفعل.');
+    }
+    saveState();
+    const newGroup = { id: uid('PG'), name, partners: [] };
+    state.partnerGroups.push(newGroup);
+    logAction('إنشاء مجموعة شركاء جديدة', { groupId: newGroup.id, name });
+    persist();
+    nav('partner-group-details', newGroup.id);
   };
 
   window.payPartnerDebt = (debtId) => {
@@ -2618,7 +2674,7 @@ function renderPartners(){
         debt.status = 'مدفوع';
         debt.paymentDate = today();
         persist();
-        drawDebtsTab();
+        draw();
     }
   };
 
@@ -2639,74 +2695,18 @@ function renderPartners(){
       exportCSV(headers, rows, 'partner_debts.csv');
   };
 
-  function setActiveTab() {
-    if (activeTab === 'partners') {
-      drawPartnersTab();
-    } else {
-      drawDebtsTab();
-    }
-  }
-
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.onclick = () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
         activeTab = btn.dataset.tab;
-        setActiveTab();
+        draw();
     };
   });
 
-  setActiveTab();
-}
-
-function renderPartnerGroups() {
-  function draw() {
-    const rows = state.partnerGroups.map(g => {
-      const totalPercent = g.partners.reduce((sum, p) => sum + p.percent, 0);
-      const partners = g.partners.map(p => {
-        const partner = partnerById(p.partnerId);
-        return `${partner ? partner.name : 'محذوف'} (${p.percent}%)`;
-      }).join(', ');
-      return [
-        `<a href="#" onclick="nav('partner-group-details', '${g.id}')">${g.name}</a>`,
-        partners,
-        `<span class="badge ${totalPercent === 100 ? 'ok' : 'warn'}">${totalPercent}%</span>`,
-        `<button class="btn secondary" onclick="delRow('partnerGroups', '${g.id}')">حذف</button>`
-      ];
-    });
-    document.getElementById('pg-list').innerHTML = table(['اسم المجموعة', 'الشركاء', 'إجمالي النسبة', ''], rows);
-  }
-
-  view.innerHTML = `
-    <div class="grid grid-2">
-      <div class="card">
-        <h3>إضافة مجموعة شركاء</h3>
-        <input class="input" id="pg-name" placeholder="اسم المجموعة (مثال: مستثمرو المرحلة الأولى)">
-        <button class="btn" style="margin-top:10px;" onclick="addGroup()">إضافة وبدء الإدارة</button>
-      </div>
-      <div class="card">
-        <h3>قائمة المجموعات</h3>
-        <div id="pg-list"></div>
-      </div>
-    </div>
-  `;
-
-  window.addGroup = () => {
-    const name = document.getElementById('pg-name').value.trim();
-    if (!name) return alert('الرجاء إدخال اسم للمجموعة.');
-    if (state.partnerGroups.some(g => g.name.toLowerCase() === name.toLowerCase())) {
-      return alert('مجموعة بنفس الاسم موجودة بالفعل.');
-    }
-    saveState();
-    const newGroup = { id: uid('PG'), name, partners: [] };
-    state.partnerGroups.push(newGroup);
-    logAction('إنشاء مجموعة شركاء جديدة', { groupId: newGroup.id, name });
-    persist();
-    nav('partner-group-details', newGroup.id);
-  };
-
   draw();
 }
+
+// This function is now obsolete as its logic is merged into renderPartners
+function renderPartnerGroups() { /* no-op */ }
 
 function renderPartnerGroupDetails(groupId) {
   const group = state.partnerGroups.find(g => g.id === groupId);
@@ -2732,7 +2732,7 @@ function renderPartnerGroupDetails(groupId) {
     <div class="card">
       <div class="header">
         <h3>إدارة مجموعة: <span contenteditable="true" onblur="inlineUpd('partnerGroups', '${group.id}', 'name', this.textContent)">${group.name}</span></h3>
-        <button class="btn secondary" onclick="nav('partner-groups')">⬅️ العودة للمجموعات</button>
+        <button class="btn secondary" onclick="nav('partners')">⬅️ العودة للشركاء</button>
       </div>
 
       <div class="grid grid-2" style="margin-top:16px; align-items: flex-start;">
