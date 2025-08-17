@@ -135,6 +135,7 @@ function load(){
 
     s.brokerDues = s.brokerDues || [];
     s.brokers = s.brokers || [];
+    s.partnerGroups = s.partnerGroups || [];
 
     // One-time migration to populate brokers from contracts/dues
     if (s.brokers.length === 0 && (s.contracts.some(c => c.brokerName) || s.brokerDues.some(d => d.brokerName))) {
@@ -156,12 +157,12 @@ function load(){
 
 
     return {
-      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [],
+      customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [], partnerGroups: [],
       settings:{theme:'dark',font:16},locked:false,
       ...s
     };
   }catch{
-    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [],
+    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [], partnerGroups: [],
       settings:{theme:'dark',font:16},locked:false};
   }
 }
@@ -211,12 +212,14 @@ const routes=[
   {id:'installments',title:'الأقساط',render:renderInstallments, tab: true},
   {id:'vouchers',title:'السندات',render:renderVouchers, tab: true},
   {id:'partners',title:'الشركاء',render:renderPartners, tab: true},
+  {id:'partner-groups', title:'مجموعات الشركاء', render:renderPartnerGroups, tab: true},
   {id:'treasury',title:'الخزينة',render:renderTreasury, tab: true},
   {id:'reports',title:'التقارير',render:renderReports, tab: true},
   {id:'partner-debts',title:'ديون الشركاء',render:renderPartnerDebts, tab: false}, // Merged into Partners screen
   {id:'audit', title: 'سجل التغييرات', render: renderAuditLog, tab: true},
   {id:'backup',title:'نسخة احتياطية',render:renderBackup, tab: true},
   {id:'unit-details', title:'تفاصيل الوحدة', render:renderUnitDetails, tab: false},
+  {id:'partner-group-details', title:'تفاصيل مجموعة الشركاء', render:renderPartnerGroupDetails, tab: false},
   {id: 'broker-details', title: 'تفاصيل السمسار', render: renderBrokerDetails, tab: false},
   {id: 'partner-details', title: 'تفاصيل الشريك', render: renderPartnerDetails, tab: false},
   {id: 'customer-details', title: 'تفاصيل العميل', render: renderCustomerDetails, tab: false},
@@ -1084,8 +1087,7 @@ function renderUnits(){
             <option value="other">أخرى...</option>
         </select>
         <input class="input" id="u-unit-type-other" placeholder="ادخل نوع الوحدة" style="display:none; grid-column: span 2;">
-        <select class="select" id="u-initial-partner" style="grid-column: span 2;"><option value="">اختر الشريك المالك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
-        <input class="input" id="u-initial-percent" type="number" placeholder="نسبة الشريك المالك" value="100">
+        <select class="select" id="u-partner-group" style="grid-column: span 3;"><option value="">اختر مجموعة شركاء...</option>${state.partnerGroups.map(g=>`<option value="${g.id}">${g.name}</option>`).join('')}</select>
       </div>
       <textarea class="input" id="u-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
       <button class="btn" style="margin-top:10px;" onclick="addUnit()">حفظ</button>
@@ -1115,8 +1117,7 @@ function renderUnits(){
     const building=document.getElementById('u-building').value.trim();
     const notes=document.getElementById('u-notes').value.trim();
     const totalPrice = parseNumber(document.getElementById('u-total-price').value);
-    const initialPartnerId = document.getElementById('u-initial-partner').value;
-    const initialPercent = parseNumber(document.getElementById('u-initial-percent').value);
+    const partnerGroupId = document.getElementById('u-partner-group').value;
 
     let unitType = document.getElementById('u-unit-type').value;
     if (unitType === 'other') {
@@ -1126,8 +1127,14 @@ function renderUnits(){
 
     if(!name || !floor || !building) return alert('الرجاء إدخال اسم الوحدة والدور والبرج.');
     if(!totalPrice) return alert('الرجاء إدخال سعر الوحدة.');
-    if(!initialPartnerId) return alert('الرجاء اختيار شريك مالك للوحدة.');
-    if(!(initialPercent > 0 && initialPercent <= 100)) return alert('الرجاء إدخال نسبة صحيحة للشريك (بين 1 و 100).');
+    if(!partnerGroupId) return alert('الرجاء اختيار مجموعة شركاء.');
+
+    const group = state.partnerGroups.find(g => g.id === partnerGroupId);
+    if (!group) return alert('لم يتم العثور على مجموعة الشركاء المحددة.');
+    const totalPercent = group.partners.reduce((sum, p) => sum + p.percent, 0);
+    if (totalPercent !== 100) {
+      return alert(`لا يمكن استخدام هذه المجموعة. إجمالي النسب فيها هو ${totalPercent}% ويجب أن يكون 100%.`);
+    }
 
     const san_b = building.replace(/\s/g, '');
     const san_f = floor.replace(/\s/g, '');
@@ -1140,21 +1147,23 @@ function renderUnits(){
 
     saveState();
 
-    // 1. Create the unit
     const newUnit = {
       id:uid('U'), code, name, status: 'متاحة', area, floor, building, notes, totalPrice, unitType
     };
-    logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code });
+    logAction('إضافة وحدة جديدة', { id: newUnit.id, code: newUnit.code, partnerGroupId });
     state.units.push(newUnit);
 
-    // 2. Create the partner link
-    const link = {id: uid('UP'), unitId: newUnit.id, partnerId: initialPartnerId, percent: initialPercent};
-    logAction('ربط شريك بوحدة عند الإنشاء', { unitId: newUnit.id, partnerId: initialPartnerId, percent: initialPercent });
-    state.unitPartners.push(link);
+    group.partners.forEach(p => {
+      const link = {id: uid('UP'), unitId: newUnit.id, partnerId: p.partnerId, percent: p.percent};
+      state.unitPartners.push(link);
+    });
+    logAction('ربط مجموعة شركاء بوحدة', { unitId: newUnit.id, partnerGroupId });
 
     persist();
-    nav('units'); // Go back to the units list to see the new unit
-    alert('تم حفظ الوحدة وربط الشريك بنجاح.');
+    // Instead of going back to the list, navigate to the new unit's details page
+    // so the user can immediately see the result of applying the partner group.
+    nav('unit-details', newUnit.id);
+    alert('تم حفظ الوحدة وربط مجموعة الشركاء بنجاح. يتم الآن عرض تفاصيل الوحدة.');
   };
 
   window.expUnits=()=>{
@@ -2648,6 +2657,129 @@ function renderPartners(){
   });
 
   setActiveTab();
+}
+
+function renderPartnerGroups() {
+  function draw() {
+    const rows = state.partnerGroups.map(g => {
+      const totalPercent = g.partners.reduce((sum, p) => sum + p.percent, 0);
+      const partners = g.partners.map(p => {
+        const partner = partnerById(p.partnerId);
+        return `${partner ? partner.name : 'محذوف'} (${p.percent}%)`;
+      }).join(', ');
+      return [
+        `<a href="#" onclick="nav('partner-group-details', '${g.id}')">${g.name}</a>`,
+        partners,
+        `<span class="badge ${totalPercent === 100 ? 'ok' : 'warn'}">${totalPercent}%</span>`,
+        `<button class="btn secondary" onclick="delRow('partnerGroups', '${g.id}')">حذف</button>`
+      ];
+    });
+    document.getElementById('pg-list').innerHTML = table(['اسم المجموعة', 'الشركاء', 'إجمالي النسبة', ''], rows);
+  }
+
+  view.innerHTML = `
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>إضافة مجموعة شركاء</h3>
+        <input class="input" id="pg-name" placeholder="اسم المجموعة (مثال: مستثمرو المرحلة الأولى)">
+        <button class="btn" style="margin-top:10px;" onclick="addGroup()">إضافة وبدء الإدارة</button>
+      </div>
+      <div class="card">
+        <h3>قائمة المجموعات</h3>
+        <div id="pg-list"></div>
+      </div>
+    </div>
+  `;
+
+  window.addGroup = () => {
+    const name = document.getElementById('pg-name').value.trim();
+    if (!name) return alert('الرجاء إدخال اسم للمجموعة.');
+    if (state.partnerGroups.some(g => g.name.toLowerCase() === name.toLowerCase())) {
+      return alert('مجموعة بنفس الاسم موجودة بالفعل.');
+    }
+    saveState();
+    const newGroup = { id: uid('PG'), name, partners: [] };
+    state.partnerGroups.push(newGroup);
+    logAction('إنشاء مجموعة شركاء جديدة', { groupId: newGroup.id, name });
+    persist();
+    nav('partner-group-details', newGroup.id);
+  };
+
+  draw();
+}
+
+function renderPartnerGroupDetails(groupId) {
+  const group = state.partnerGroups.find(g => g.id === groupId);
+  if (!group) return nav('partner-groups');
+
+  function draw() {
+    const totalPercent = group.partners.reduce((sum, p) => sum + p.percent, 0);
+    const rows = group.partners.map(p => {
+        const partner = partnerById(p.partnerId);
+        return [
+            partner ? partner.name : 'شريك محذوف',
+            `${p.percent}%`,
+            `<button class="btn secondary" onclick="removePartnerFromGroup('${p.partnerId}')">حذف</button>`
+        ];
+    });
+    document.getElementById('pgd-list').innerHTML = table(['الشريك', 'النسبة', ''], rows);
+    const sumEl = document.getElementById('pgd-sum');
+    sumEl.textContent = `الإجمالي: ${totalPercent}%`;
+    sumEl.className = `badge ${totalPercent === 100 ? 'ok' : 'warn'}`;
+  }
+
+  view.innerHTML = `
+    <div class="card">
+      <div class="header">
+        <h3>إدارة مجموعة: <span contenteditable="true" onblur="inlineUpd('partnerGroups', '${group.id}', 'name', this.textContent)">${group.name}</span></h3>
+        <button class="btn secondary" onclick="nav('partner-groups')">⬅️ العودة للمجموعات</button>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:16px; align-items: flex-start;">
+        <div class="card">
+          <h4>إضافة شريك للمجموعة</h4>
+          <div class="tools">
+            <select class="select" id="pgd-partner-select" style="flex:1"><option value="">اختر شريك...</option>${state.partners.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+            <input class="input" id="pgd-percent" type="number" placeholder="النسبة %" style="flex:0.5">
+            <button class="btn" onclick="addPartnerToGroup()">إضافة</button>
+          </div>
+        </div>
+        <div class="card">
+          <h4>الشركاء في المجموعة (<span id="pgd-sum"></span>)</h4>
+          <div id="pgd-list"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  window.addPartnerToGroup = () => {
+    const partnerId = document.getElementById('pgd-partner-select').value;
+    const percent = parseNumber(document.getElementById('pgd-percent').value);
+
+    if (!partnerId || !percent) return alert('الرجاء اختيار شريك وإدخال نسبة.');
+    if (group.partners.some(p => p.partnerId === partnerId)) return alert('هذا الشريك موجود بالفعل في المجموعة.');
+
+    const currentTotal = group.partners.reduce((sum, p) => sum + p.percent, 0);
+    if (currentTotal + percent > 100) {
+      return alert(`لا يمكن إضافة هذه النسبة. الإجمالي الحالي هو ${currentTotal}%. إضافة ${percent}% سيجعل المجموع يتجاوز 100%.`);
+    }
+
+    saveState();
+    group.partners.push({ partnerId, percent });
+    logAction('إضافة شريك إلى مجموعة', { groupId, partnerId, percent });
+    persist();
+    draw();
+  };
+
+  window.removePartnerFromGroup = (partnerId) => {
+    saveState();
+    group.partners = group.partners.filter(p => p.partnerId !== partnerId);
+    logAction('حذف شريك من مجموعة', { groupId, partnerId });
+    persist();
+    draw();
+  };
+
+  draw();
 }
 
 let lastReportData = null;
