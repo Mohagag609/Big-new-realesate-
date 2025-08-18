@@ -1,6 +1,6 @@
 /* ===== أساس التطبيق / إعدادات / قفل ===== */
 const APPKEY='estate_pro_final_v3';
-const state = load();
+let state = {};
 let historyStack = [];
 let historyIndex = -1;
 let currentView = 'dash'; // To track the current page for refresh on undo/redo
@@ -43,9 +43,54 @@ function saveState() {
     historyIndex = historyStack.length - 1;
 }
 
-function load(){
-  try{
-    const s = JSON.parse(localStorage.getItem(APPKEY))||{};
+async function loadStateFromDB() {
+    await db.init();
+
+    const loadedState = {};
+    const storeNames = [
+        'customers', 'units', 'partners', 'unitPartners', 'contracts',
+        'installments', 'payments', 'partnerDebts', 'safes', 'transfers',
+        'auditLog', 'vouchers', 'brokerDues', 'brokers', 'partnerGroups'
+    ];
+
+    const dataPromises = storeNames.map(name => db.getAll(name).then(data => ({ name, data })));
+    const results = await Promise.all(dataPromises);
+
+    let isDbEmpty = true;
+    results.forEach(res => {
+        loadedState[res.name] = res.data;
+        if (res.data && res.data.length > 0) isDbEmpty = false;
+    });
+
+    const settings = await db.get('appState', 'settings');
+    const locked = await db.get('appState', 'locked');
+
+    loadedState.settings = settings ? settings.value : {theme:'dark',font:16};
+    loadedState.locked = locked ? locked.value : false;
+    if (loadedState.locked) {
+        const pass = await db.get('appState', 'pass');
+        if(pass) loadedState.settings.pass = pass.value;
+    }
+
+    // If the DB is totally empty, return a default state with a main safe
+    if (isDbEmpty && !settings) {
+        console.log('DB is empty, initializing with default state.');
+        const defaultState = {
+            customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [], partnerGroups: [],
+            settings:{theme:'dark',font:16},locked:false,
+        };
+        defaultState.safes.push({ id: uid('S'), name: 'الخزنة الرئيسية', balance: 0 });
+        // Persist this default state so it's not empty on next load
+        Object.assign(state, defaultState);
+        await persist();
+        return defaultState;
+    }
+
+    return loadedState;
+}
+
+function migrateStateFromLocalStorage(s) {
+    s = s || {};
 
     // Data migration for customers
     if (s.customers && s.customers.length > 0) {
@@ -155,18 +200,105 @@ function load(){
         });
     }
 
-
     return {
       customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [], partnerGroups: [],
       settings:{theme:'dark',font:16},locked:false,
       ...s
     };
-  }catch{
-    return {customers:[],units:[],partners:[],unitPartners:[],contracts:[],installments:[],payments:[],partnerDebts:[], safes: [], transfers: [], auditLog: [], vouchers: [], brokerDues: [], brokers: [], partnerGroups: [],
-      settings:{theme:'dark',font:16},locked:false};
-  }
 }
-function persist(){ localStorage.setItem(APPKEY, JSON.stringify(state)); applySettings(); }
+
+async function runMigration() {
+    const migrationMarker = localStorage.getItem(APPKEY + '_migrated_to_indexeddb');
+    if (migrationMarker) {
+        console.log('Data already migrated to IndexedDB.');
+        return;
+    }
+
+    const oldData = localStorage.getItem(APPKEY);
+    if (!oldData) {
+        console.log('No localStorage data found to migrate.');
+        return;
+    }
+
+    console.log('Found old data in localStorage. Starting migration to IndexedDB...');
+
+    try {
+        await db.init();
+        const oldState = JSON.parse(oldData);
+        const migratedState = migrateStateFromLocalStorage(oldState);
+
+        const promises = [];
+        const storeNames = [
+            'customers', 'units', 'partners', 'unitPartners', 'contracts',
+            'installments', 'payments', 'partnerDebts', 'safes', 'transfers',
+            'auditLog', 'vouchers', 'brokerDues', 'brokers', 'partnerGroups'
+        ];
+
+        for (const storeName of storeNames) {
+            if (migratedState[storeName] && Array.isArray(migratedState[storeName])) {
+                await db.clearStore(storeName);
+                for (const item of migratedState[storeName]) {
+                    if (item && typeof item.id !== 'undefined') {
+                        promises.push(db.put(storeName, item));
+                    }
+                }
+            }
+        }
+
+        await db.clearStore('appState');
+        promises.push(db.put('appState', { key: 'settings', value: migratedState.settings }));
+        promises.push(db.put('appState', { key: 'locked', value: migratedState.locked }));
+        if (migratedState.settings.pass) {
+            promises.push(db.put('appState', { key: 'pass', value: migratedState.settings.pass }));
+        }
+
+        await Promise.all(promises);
+
+        console.log('Migration to IndexedDB successful!');
+        localStorage.setItem(APPKEY + '_migrated_to_indexeddb', 'true');
+    } catch (error) {
+        console.error('Migration to IndexedDB failed:', error);
+    }
+}
+async function persist() {
+    try {
+        const promises = [];
+        const storeNames = [
+            'customers', 'units', 'partners', 'unitPartners', 'contracts',
+            'installments', 'payments', 'partnerDebts', 'safes', 'transfers',
+            'auditLog', 'vouchers', 'brokerDues', 'brokers', 'partnerGroups'
+        ];
+
+        // This is a "nuke and pave" approach. It's inefficient but necessary to support
+        // the existing snapshot-based undo/redo functionality.
+        for (const storeName of storeNames) {
+            await db.clearStore(storeName);
+            if (state[storeName] && Array.isArray(state[storeName])) {
+                for (const item of state[storeName]) {
+                    // Ensure item is valid before putting it in the store
+                    if (item && typeof item.id !== 'undefined') {
+                        promises.push(db.put(storeName, item));
+                    }
+                }
+            }
+        }
+
+        await db.clearStore('appState');
+        promises.push(db.put('appState', { key: 'settings', value: state.settings }));
+        promises.push(db.put('appState', { key: 'locked', value: state.locked }));
+        if (state.settings && state.settings.pass) {
+            promises.push(db.put('appState', { key: 'pass', value: state.settings.pass }));
+        }
+
+        await Promise.all(promises);
+    } catch (error) {
+        console.error('Failed to persist state to IndexedDB:', error);
+        // Optionally, alert the user that the save failed.
+        // alert('حدث خطأ أثناء حفظ البيانات. قد لا يتم حفظ التغييرات الأخيرة.');
+    }
+
+    applySettings();
+}
 function uid(p){ return p+'-'+Math.random().toString(36).slice(2,9); }
 function today(){ return new Date().toISOString().slice(0,10); }
 function logAction(description, details = {}) {
@@ -182,11 +314,11 @@ function applySettings(){ document.documentElement.setAttribute('data-theme', st
 applySettings();
 document.getElementById('themeSel').value=state.settings.theme||'dark';
 document.getElementById('fontSel').value=String(state.settings.font||16);
-document.getElementById('themeSel').onchange=(e)=>{ state.settings.theme=e.target.value; persist(); };
-document.getElementById('fontSel').onchange=(e)=>{ state.settings.font=Number(e.target.value); persist(); };
-document.getElementById('lockBtn').onclick=()=>{
+document.getElementById('themeSel').onchange= async (e)=>{ state.settings.theme=e.target.value; await persist(); };
+document.getElementById('fontSel').onchange= async (e)=>{ state.settings.font=Number(e.target.value); await persist(); };
+document.getElementById('lockBtn').onclick= async ()=>{
   const pass=prompt('ضع كلمة مرور أو اتركها فارغة لإلغاء القفل','');
-  state.locked=!!pass; state.settings.pass=pass||null; persist();
+  state.locked=!!pass; state.settings.pass=pass||null; await persist();
   alert(state.locked?'تم تفعيل القفل':'تم إلغاء القفل'); checkLock();
 };
 function checkLock(){
@@ -205,25 +337,25 @@ function updateUndoRedoButtons() {
     if (redoBtn) redoBtn.disabled = historyIndex >= historyStack.length - 1;
 }
 
-function undo() {
+async function undo() {
     if (historyIndex > 0) {
         historyIndex--;
         const restoredState = JSON.parse(JSON.stringify(historyStack[historyIndex]));
         Object.keys(state).forEach(key => delete state[key]);
         Object.assign(state, restoredState);
-        persist();
+        await persist();
         nav(currentView, currentParam); // Re-render the current view with its parameter
         updateUndoRedoButtons();
     }
 }
 
-function redo() {
+async function redo() {
     if (historyIndex < historyStack.length - 1) {
         historyIndex++;
         const restoredState = JSON.parse(JSON.stringify(historyStack[historyIndex]));
         Object.keys(state).forEach(key => delete state[key]);
         Object.assign(state, restoredState);
-        persist();
+        await persist();
         nav(currentView, currentParam); // Re-render the current view with its parameter
         updateUndoRedoButtons();
     }
@@ -240,15 +372,40 @@ function saveState() {
 }
 
 
-checkLock();
-saveState(); // Save the initial state
+// All initialization is now done asynchronously after the DOM is loaded.
+document.addEventListener('DOMContentLoaded', async () => {
+    // Register the service worker
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./service-worker.js')
+                .then(registration => {
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                })
+                .catch(err => {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+        });
+    }
 
-document.addEventListener('DOMContentLoaded', () => {
+    await runMigration();
+
+    // Overwrite the initial empty state with data from the database
+    state = await loadStateFromDB();
+
+    // Now that the state is loaded, run the setup functions
+    applySettings();
+    document.getElementById('themeSel').value = state.settings.theme || 'dark';
+    document.getElementById('fontSel').value = String(state.settings.font || 16);
+
+
     const undoBtn = document.getElementById('undoBtn');
     const redoBtn = document.getElementById('redoBtn');
     if(undoBtn) undoBtn.onclick = undo;
     if(redoBtn) redoBtn.onclick = redo;
     updateUndoRedoButtons();
+
+    // Finally, render the initial view
+    nav('dash');
 });
 
 
@@ -291,7 +448,6 @@ function nav(id, param = null){
 
   route.render(param);
 }
-nav('dash');
 
 /* ===== أدوات عامة ===== */
 function showModal(title, content, onSave) {
@@ -864,7 +1020,7 @@ function renderCustomers(){
     </div>
   </div>`;
 
-  window.addCustomer=()=>{
+  window.addCustomer= async ()=>{
     const name = document.getElementById('c-name').value.trim();
     const phone = document.getElementById('c-phone').value.trim();
     const nationalId = document.getElementById('c-nationalId').value.trim();
@@ -881,7 +1037,7 @@ function renderCustomers(){
     const newCustomer = { id: uid('C'), name, phone, nationalId, address, status, notes };
     logAction('إضافة عميل جديد', { id: newCustomer.id, name: newCustomer.name });
     state.customers.push(newCustomer);
-    persist();
+    await persist();
 
     // Reset form
     document.getElementById('c-name').value = '';
@@ -902,14 +1058,15 @@ function renderCustomers(){
   document.getElementById('c-imp').onchange=(e)=>{
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader();
-    r.onload=()=>{
+    r.onload= async ()=>{
       saveState();
       const lines=String(r.result).split(/\r?\n/).slice(1);
       lines.forEach(line=>{
         const [name,phone,nationalId,address,status,notes]=line.split(',').map(x=>x?.replace(/^"|"$/g,'')||'');
         if(name) state.customers.push({id:uid('C'),name,phone,nationalId,address,status,notes});
       });
-      persist(); draw();
+      await persist();
+      draw();
     };
     r.readAsText(f,'utf-8');
   };
@@ -986,18 +1143,18 @@ function renderCustomerDetails(customerId) {
         </div>
     `;
 }
-window.inlineUpd=(coll,id,key,val)=>{
+window.inlineUpd= async (coll,id,key,val)=>{
   saveState();
   const o=state[coll].find(x=>x.id===id);
   if(o){
     const oldValue = o[key];
     o[key]=val;
     logAction(`تعديل مباشر في ${coll}`, { collection: coll, id, key, oldValue, newValue: val });
-    persist();
+    await persist();
   }
 };
 
-window.updatePartnerPercent = (element, linkId, originalPercent) => {
+window.updatePartnerPercent = async (element, linkId, originalPercent) => {
   const link = state.unitPartners.find(up => up.id === linkId);
   if (!link) return;
 
@@ -1020,13 +1177,13 @@ window.updatePartnerPercent = (element, linkId, originalPercent) => {
   saveState();
   link.percent = newPercent;
   logAction('تعديل نسبة الشريك', { unitPartnerId: linkId, newPercent });
-  persist();
+  await persist();
   // Re-render the view to update the total percentage badge
   nav('unit-details', link.unitId);
   alert('تم تحديث النسبة بنجاح.');
 };
 
-window.delRow=(coll,id)=>{
+window.delRow= async (coll,id)=>{
   const nameMap = {
     customers: 'العميل',
     units: 'الوحدة',
@@ -1044,7 +1201,7 @@ window.delRow=(coll,id)=>{
     saveState();
     logAction(`حذف ${collName}`, { collection: coll, id, deletedItem: JSON.stringify(itemToDelete) });
     state[coll]=state[coll].filter(x=>x.id!==id);
-    persist();
+    await persist();
     if (coll === 'unitPartners') {
       renderUnitDetails(itemToDelete.unitId);
     } else {
@@ -1162,7 +1319,7 @@ function renderUnits(){
     otherInput.style.display = typeSelect.value === 'other' ? 'block' : 'none';
   }
 
-  window.addUnit=()=>{
+  window.addUnit= async ()=>{
     const name=document.getElementById('u-name').value.trim();
     const area=document.getElementById('u-area').value.trim();
     const floor=document.getElementById('u-floor').value.trim();
@@ -1211,7 +1368,7 @@ function renderUnits(){
     });
     logAction('ربط مجموعة شركاء بوحدة', { unitId: newUnit.id, partnerGroupId });
 
-    persist();
+    await persist();
     // Instead of going back to the list, navigate to the new unit's details page
     // so the user can immediately see the result of applying the partner group.
     nav('unit-details', newUnit.id);
@@ -1232,7 +1389,7 @@ function renderUnits(){
   document.getElementById('u-imp').onchange=(e)=>{
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader();
-    r.onload=()=>{
+    r.onload= async ()=>{
       saveState();
       const lines=String(r.result).split(/\r?\n/).slice(1);
       lines.forEach(line=>{
@@ -1242,7 +1399,8 @@ function renderUnits(){
             state.units.push({id:uid('U'),code,name,totalPrice:parseNumber(price),status:status||'متاحة',floor,building,notes,unitType});
         }
       });
-      persist(); draw();
+      await persist();
+      draw();
     };
     r.readAsText(f,'utf-8');
   };
@@ -1283,7 +1441,7 @@ function renderUnitEdit(unitId) {
     </div>
     `;
 
-    window.updateUnit = (id) => {
+    window.updateUnit = async (id) => {
         const u = unitById(id);
         if (!u) return alert('لم يتم العثور على الوحدة.');
 
@@ -1308,7 +1466,7 @@ function renderUnitEdit(unitId) {
         u.code = `${building.replace(/\s/g, '')}-${floor.replace(/\s/g, '')}-${name.replace(/\s/g, '')}`;
 
         logAction('تعديل بيانات الوحدة', { unitId: id, updatedData: { name, floor, building, price: u.totalPrice } });
-        persist();
+        await persist();
         alert('تم حفظ التعديلات بنجاح.');
         nav('units');
     }
@@ -1340,7 +1498,7 @@ function renderSafes(){
   </div>
   `;
 
-  window.addSafe = () => {
+  window.addSafe = async () => {
       const name = document.getElementById('s-name').value.trim();
       const balance = parseNumber(document.getElementById('s-balance').value);
       if (!name) return alert('الرجاء إدخال اسم الخزنة.');
@@ -1353,7 +1511,7 @@ function renderSafes(){
       const newSafe = { id: uid('S'), name, balance };
       logAction('إضافة خزنة جديدة', { safeId: newSafe.id, name, initialBalance: balance });
       state.safes.push(newSafe);
-      persist();
+      await persist();
 
       document.getElementById('s-name').value = '';
       document.getElementById('s-balance').value = '0';
@@ -1363,7 +1521,7 @@ function renderSafes(){
   draw();
 }
 
-window.executeReturn = (unitId, buyingPartnerId) => {
+window.executeReturn = async (unitId, buyingPartnerId) => {
     saveState();
     const u = unitById(unitId);
     const ct = state.contracts.find(c => c.unitId === unitId);
@@ -1417,7 +1575,7 @@ window.executeReturn = (unitId, buyingPartnerId) => {
     state.unitPartners = state.unitPartners.filter(up => up.unitId !== unitId);
     state.unitPartners.push({ id: uid('UP'), unitId, partnerId: buyingPartnerId, percent: 100 });
 
-    persist();
+    await persist();
     alert('تمت عملية الإرجاع وشراء الشريك بنجاح.');
     nav('units');
     return true; // for modal
@@ -1512,7 +1670,7 @@ function renderUnitDetails(unitId){
       </div>
     `;
 
-    window.addPartnerToUnit = (unitId) => {
+    window.addPartnerToUnit = async (unitId) => {
       const partnerId = document.getElementById('ud-pr-select').value;
       const percent = parseNumber(document.getElementById('ud-pr-percent').value);
       if(!partnerId || !(percent > 0)) return alert('الرجاء اختيار شريك وإدخال نسبة صحيحة.');
@@ -1528,7 +1686,7 @@ function renderUnitDetails(unitId){
       const link = {id: uid('UP'), unitId, partnerId, percent};
       logAction('ربط شريك بوحدة', { unitId, partnerId, percent });
       state.unitPartners.push(link);
-      persist();
+      await persist();
       drawPartners();
     };
 
@@ -1543,7 +1701,7 @@ function renderUnitDetails(unitId){
   }
 }
 
-function deleteContract(contractId) {
+async function deleteContract(contractId) {
     const contract = state.contracts.find(c => c.id === contractId);
     if (!contract) {
       alert('لم يتم العثور على العقد.');
@@ -1616,7 +1774,7 @@ function deleteContract(contractId) {
         unit.status = 'متاحة';
     }
 
-    persist();
+    await persist();
     nav('contracts');
 }
 
@@ -1716,7 +1874,7 @@ function renderContracts(){
     </div>
   </div>`;
 
-  window.createContract=()=>{
+  window.createContract= async ()=>{
     const total=parseNumber(document.getElementById('ct-total').value), down=parseNumber(document.getElementById('ct-down').value);
     const discount = parseNumber(document.getElementById('ct-discount').value);
     const brokerName = document.getElementById('ct-broker-name').value.trim();
@@ -1842,7 +2000,7 @@ function renderContracts(){
     }
 
     const u=unitById(unitId); if(u) u.status='مباعة';
-    persist();
+    await persist();
     draw();
     // printContract(ct);
   };
@@ -2209,7 +2367,7 @@ function renderInstallments() {
         drawTable();
     };
 
-    window.rescheduleInstallment = function(id){
+    window.rescheduleInstallment = async function(id){
       const i = state.installments.find(x=>x.id===id); if(!i) return;
       const oldDetails = { amount: i.amount, dueDate: i.dueDate };
 
@@ -2249,7 +2407,7 @@ function renderInstallments() {
            alert('تمت إعادة جدولة القسط.');
       }
 
-      persist();
+      await persist();
       drawTable();
     };
 
@@ -2268,7 +2426,7 @@ function renderInstallments() {
               ${safeOptions}
           </select>
       `;
-      showModal('تسجيل دفعة قسط', content, () => {
+      showModal('تسجيل دفعة قسط', content, async () => {
           const paid = parseNumber(document.getElementById('inst-pay-amount').value);
           const safeId = document.getElementById('inst-pay-safe').value;
           if(!(paid > 0) || !safeId) {
@@ -2277,10 +2435,10 @@ function renderInstallments() {
           }
           saveState();
           if (processPayment(i.unitId, paid, 'قسط', today(), safeId, i.id)) {
-            persist();
+            await persist();
             drawTable();
           } else {
-            undo();
+            undo(); // This will need to be async too
           }
           return true;
       });
@@ -2416,7 +2574,7 @@ function showAddExpenseModal() {
         </select>
     `;
 
-    showModal('إضافة سند صرف جديد', content, () => {
+    showModal('إضافة سند صرف جديد', content, async () => {
         const description = document.getElementById('exp-desc').value.trim();
         const beneficiary = document.getElementById('exp-beneficiary').value.trim();
         const amount = parseNumber(document.getElementById('exp-amount').value);
@@ -2451,7 +2609,7 @@ function showAddExpenseModal() {
         state.vouchers.push(newVoucher);
         logAction('إضافة سند صرف يدوي', newVoucher);
 
-        persist();
+        await persist();
         nav('vouchers');
         return true;
     });
@@ -2701,7 +2859,7 @@ function renderPartners(){
     document.getElementById('pd-list').innerHTML = table(headers, rows, sort, (ns) => { sort = ns; drawDebtsTab(); });
   }
 
-  window.addPartner=()=>{
+  window.addPartner= async ()=>{
     const name=document.getElementById('pr-name').value.trim(); if(!name) return;
     const phone = document.getElementById('pr-phone').value;
     if (state.partners.some(p => p.name.toLowerCase() === name.toLowerCase())) {
@@ -2711,11 +2869,11 @@ function renderPartners(){
     const newPartner = {id:uid('PR'),name,phone};
     logAction('إضافة شريك جديد', { partnerId: newPartner.id, name });
     state.partners.push(newPartner);
-    persist();
+    await persist();
     draw();
   };
 
-  window.addGroup = () => {
+  window.addGroup = async () => {
     const name = document.getElementById('pg-name').value.trim();
     if (!name) return alert('الرجاء إدخال اسم للمجموعة.');
     if (state.partnerGroups.some(g => g.name.toLowerCase() === name.toLowerCase())) {
@@ -2725,18 +2883,18 @@ function renderPartners(){
     const newGroup = { id: uid('PG'), name, partners: [] };
     state.partnerGroups.push(newGroup);
     logAction('إنشاء مجموعة شركاء جديدة', { groupId: newGroup.id, name });
-    persist();
+    await persist();
     nav('partner-group-details', newGroup.id);
   };
 
-  window.payPartnerDebt = (debtId) => {
+  window.payPartnerDebt = async (debtId) => {
     const debt = state.partnerDebts.find(d => d.id === debtId);
     if(!debt) return alert('لم يتم العثور على الدين.');
     if(confirm(`هل تؤكد سداد هذا الدين بمبلغ ${egp(debt.amount)}؟`)){
         saveState();
         debt.status = 'مدفوع';
         debt.paymentDate = today();
-        persist();
+        await persist();
         draw();
     }
   };
@@ -2815,7 +2973,7 @@ function renderPartnerGroupDetails(groupId) {
     </div>
   `;
 
-  window.addPartnerToGroup = () => {
+  window.addPartnerToGroup = async () => {
     const partnerId = document.getElementById('pgd-partner-select').value;
     const percent = parseNumber(document.getElementById('pgd-percent').value);
 
@@ -2830,15 +2988,15 @@ function renderPartnerGroupDetails(groupId) {
     saveState();
     group.partners.push({ partnerId, percent });
     logAction('إضافة شريك إلى مجموعة', { groupId, partnerId, percent });
-    persist();
+    await persist();
     draw();
   };
 
-  window.removePartnerFromGroup = (partnerId) => {
+  window.removePartnerFromGroup = async (partnerId) => {
     saveState();
     group.partners = group.partners.filter(p => p.partnerId !== partnerId);
     logAction('حذف شريك من مجموعة', { groupId, partnerId });
-    persist();
+    await persist();
     draw();
   };
 
@@ -2921,7 +3079,7 @@ function showAddTransferModal() {
       <input class="input" id="t-date" type="date" value="${today()}" style="margin-top:10px;">
       <textarea class="input" id="t-notes" placeholder="ملاحظات" style="margin-top:10px;" rows="2"></textarea>
     `;
-    showModal('تسجيل تحويل بين الخزن', content, () => {
+    showModal('تسجيل تحويل بين الخزن', content, async () => {
         const fromSafeId = document.getElementById('t-from').value;
         const toSafeId = document.getElementById('t-to').value;
         const amount = parseNumber(document.getElementById('t-amount').value);
@@ -2943,7 +3101,7 @@ function showAddTransferModal() {
         state.transfers.push(newTransfer);
         logAction('تنفيذ تحويل بين الخزن', newTransfer);
 
-        persist();
+        await persist();
         nav('treasury');
         return true;
     });
@@ -2952,10 +3110,16 @@ function showAddTransferModal() {
 const REPORT_DEFINITIONS = {
   'المالية': [
     {
-      id: 'payments_monthly',
-      title: 'مدفوعات شهرية',
-      description: 'عرض إجمالي المدفوعات مجمعة حسب الشهر.',
-      icon: '📅'
+      id: 'revenue_monthly',
+      title: 'تقرير الإيرادات الشهري',
+      description: 'عرض إجمالي الإيرادات (الدفعات والمقدمات) مجمعة حسب الشهر.',
+      icon: '💵'
+    },
+    {
+      id: 'transactions_log',
+      title: 'سجل المعاملات العقارية',
+      description: 'قائمة بجميع العقود المسجلة وتفاصيلها.',
+      icon: '🧾'
     },
     {
       id: 'cashflow',
@@ -2998,10 +3162,10 @@ const REPORT_DEFINITIONS = {
       icon: '⚠️'
     },
     {
-      id: 'cust_activity',
-      title: 'نشاط العملاء',
-      description: 'تقرير يوضح عدد الوحدات وإجمالي المدفوعات لكل عميل.',
-      icon: '🧍'
+      id: 'customer_statement',
+      title: 'كشف حساب عميل',
+      description: 'عرض تفصيلي لجميع معاملات عميل معين.',
+      icon: '🧍‍♂️'
     },
     {
       id: 'units_status',
@@ -3126,8 +3290,9 @@ function renderReportFilterScreen(reportId) {
   const filtersContainer = document.getElementById('rep-filters-container');
 
   // Logic to add filters based on reportId
-  const needsDates = ['payments_monthly', 'cashflow', 'partner_profits', 'inst_due', 'inst_overdue', 'cust_activity', 'partner_cashflow', 'partner_summary'];
+  const needsDates = ['revenue_monthly', 'transactions_log', 'cashflow', 'partner_profits', 'inst_due', 'inst_overdue', 'partner_cashflow', 'partner_summary'];
   const needsPartner = ['partner_profits', 'partner_cashflow', 'partner_summary'];
+  const needsCustomer = ['customer_statement'];
 
   if (needsDates.includes(reportId)) {
     filtersContainer.innerHTML += `
@@ -3140,6 +3305,14 @@ function renderReportFilterScreen(reportId) {
       <select id="rep-partner-sel" class="select">
           <option value="">اختر شريك...</option>
           ${state.partners.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+      </select>
+    `;
+  }
+  if (needsCustomer.includes(reportId)) {
+    filtersContainer.innerHTML += `
+      <select id="rep-customer-sel" class="select">
+          <option value="">اختر عميل...</option>
+          ${state.customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
       </select>
     `;
   }
@@ -3229,24 +3402,84 @@ window.runReport=(type)=>{
   let title='', headers=[], rows=[];
   const out=document.getElementById('rep-out'); out.innerHTML='';
   switch(type){
+    case 'revenue_monthly':
+        title = 'تقرير الإيرادات الشهرية';
+        headers = ['الشهر', 'إجمالي الإيرادات'];
+        let revenuePays = state.vouchers.filter(v => v.type === 'receipt');
+        if (from) revenuePays = revenuePays.filter(p => p.date >= from);
+        if (to) revenuePays = revenuePays.filter(p => p.date <= to);
+        const revenueMonths = {};
+        revenuePays.forEach(p => {
+            const ym = p.date.slice(0, 7);
+            revenueMonths[ym] = (revenueMonths[ym] || 0) + Number(p.amount || 0);
+        });
+        rows = Object.keys(revenueMonths).sort().map(k => [k, egp(revenueMonths[k])]);
+        break;
+    case 'transactions_log':
+        title = 'سجل المعاملات العقارية';
+        headers = ['تاريخ العقد', 'كود العقد', 'الوحدة', 'العميل', 'السعر الإجمالي'];
+        let contractsLog = state.contracts.slice();
+        if (from) contractsLog = contractsLog.filter(c => c.start >= from);
+        if (to) contractsLog = contractsLog.filter(c => c.start <= to);
+        rows = contractsLog.sort((a,b) => (a.start||'').localeCompare(b.start||'')).map(c => [
+            c.start,
+            c.code,
+            getUnitDisplayName(unitById(c.unitId)),
+            (custById(c.customerId) || {}).name || '—',
+            egp(c.totalPrice)
+        ]);
+        break;
     case 'units_status':
       title='تقرير حالة الوحدات'; headers=['الحالة','العدد','إجمالي السعر'];
       const stats={}; state.units.forEach(u=>{ stats[u.status]=(stats[u.status]||{c:0,p:0}); stats[u.status].c++; stats[u.status].p+=Number(u.totalPrice||0); });
       rows=Object.keys(stats).map(k=>[k,stats[k].c,egp(stats[k].p)]);
       break;
-    case 'cust_activity':
-      title='تقرير نشاط العملاء'; headers=['العميل','عدد الوحدات','إجمالي المدفوعات'];
-      const custs={}; state.contracts.forEach(c=>{ custs[c.customerId]=(custs[c.customerId]||{u:new Set(),p:0}); custs[c.customerId].u.add(c.unitId); });
+    case 'customer_statement':
+        const customerId = document.getElementById('rep-customer-sel')?.value;
+        if (!customerId) {
+            out.innerHTML = '<p style=\"color:var(--warn)\">الرجاء اختيار عميل لعرض هذا التقرير.</p>';
+            return;
+        }
+        const customer = custById(customerId);
+        title = `كشف حساب العميل: ${customer.name}`;
 
-      let custPays=state.payments.slice();
-      if(from) custPays=custPays.filter(p=>p.date>=from);
-      if(to) custPays=custPays.filter(p=>p.date<=to);
-      custPays.forEach(p=>{
-        const ct=state.contracts.find(c=>c.unitId===p.unitId);
-        if(ct&&ct.customerId&&custs[ct.customerId]) custs[ct.customerId].p+=Number(p.amount||0);
-      });
-      rows=Object.keys(custs).map(k=>[(custById(k)||{}).name||k,custs[k].u.size,egp(custs[k].p)]);
-      break;
+        const customerContracts = state.contracts.filter(c => c.customerId === customerId);
+        let totalPaid = 0;
+        let totalDebt = 0;
+        let totalValue = 0;
+
+        customerContracts.forEach(c => {
+            const unit = unitById(c.unitId);
+            if (!unit) return;
+            const remaining = calcRemaining(unit);
+            const value = c.totalPrice || 0;
+            const paid = value - remaining;
+            totalValue += value;
+            totalPaid += paid;
+            totalDebt += remaining;
+        });
+
+        const summaryHTML = `
+            <div class="grid grid-3" style="margin-bottom: 16px;">
+                <div class="card"><h4>إجمالي قيمة العقود</h4><div class="big">${egp(totalValue)}</div></div>
+                <div class="card"><h4>إجمالي المدفوع</h4><div class="big" style="color:var(--ok);">${egp(totalPaid)}</div></div>
+                <div class="card"><h4>إجمالي المديونية</h4><div class="big" style="color:var(--warn);">${egp(totalDebt)}</div></div>
+            </div>
+        `;
+
+        const contractIds = new Set(customerContracts.map(c => c.id));
+        const installmentIds = new Set(state.installments.filter(i => contractIds.has(state.contracts.find(c => c.unitId === i.unitId)?.id)).map(i => i.id));
+
+        const voucherRows = state.vouchers
+            .filter(v => v.type === 'receipt' && (contractIds.has(v.linked_ref) || installmentIds.has(v.linked_ref)))
+            .map(v => [v.date, v.description, egp(v.amount), (state.safes.find(s=>s.id===v.safeId)||{}).name||'—']);
+
+        const transactionTable = table(['التاريخ', 'البيان', 'المبلغ', 'الخزنة'], voucherRows);
+
+        lastReportData = { title, headers: [], rows: [] }; // Not a simple table, so export is tricky
+        const bodyHTML=`<h1>${title}</h1>${summaryHTML}<h3>سجل المدفوعات</h3>${transactionTable}`;
+        out.innerHTML=bodyHTML + `<div class="tools"><button class="btn" onclick="printHTML('${title}', document.getElementById('rep-out').innerHTML)">طباعة PDF</button></div>`;
+        return;
     case 'inst_due':
       title='تقرير الأقساط المستحقة'; headers=['الوحدة','العميل','المبلغ','تاريخ الاستحقاق'];
       let inst=state.installments.filter(i=>i.status!=='مدفوع');
@@ -3471,7 +3704,7 @@ function renderTransfers(){
   </div>
   `;
 
-  window.addTransfer = () => {
+  window.addTransfer = async () => {
     const fromSafeId = document.getElementById('t-from').value;
     const toSafeId = document.getElementById('t-to').value;
     const amount = parseNumber(document.getElementById('t-amount').value);
@@ -3516,7 +3749,7 @@ function renderTransfers(){
     logAction('تنفيذ تحويل بين الخزن', newTransfer);
     state.transfers.push(newTransfer);
 
-    persist();
+    await persist();
     alert('تم تنفيذ التحويل بنجاح!');
     nav('transfers'); // Refresh the view
   };
@@ -3598,9 +3831,166 @@ function renderBackup(){
           <input type="file" id="restore-excel-file" accept=".xlsx, .xls" style="display:none">
           استعادة نسخة Excel
         </label>
+      </div>
+      <hr>
+      <div class="tools">
+        <button class="btn accent" onclick="exportSQLite()">تصدير إلى SQLite</button>
+        <label class="btn accent secondary">
+          <input type="file" id="import-sqlite-file" accept=".sqlite,.db" style="display:none">
+          استيراد من SQLite
+        </label>
         <button class="btn warn" onclick="doReset()">مسح كل البيانات</button>
       </div>
     </div>`;
+
+  window.exportSQLite = async () => {
+    try {
+        const loadingEl = document.createElement('div');
+        loadingEl.textContent = 'جاري تحضير ملف SQLite... قد تستغرق هذه العملية بعض الوقت.';
+        loadingEl.style = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--brand);color:white;padding:10px 20px;border-radius:8px;z-index:2000;';
+        document.body.appendChild(loadingEl);
+
+        const sql = await initSqlJs({
+            locateFile: filename => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${filename}`
+        });
+        const db = new sql.Database();
+
+        const storeNames = Object.keys(state).filter(k => Array.isArray(state[k]));
+
+        for (const storeName of storeNames) {
+            const data = state[storeName];
+            if (!data || data.length === 0) continue;
+
+            const firstItem = data[0];
+            const columns = Object.keys(firstItem);
+
+            const columnDefs = columns.map(col => {
+                // Use a simple TEXT type for all columns to avoid type mismatches.
+                // SQLite is flexible with typing anyway.
+                return `"${col}" TEXT`;
+            }).join(', ');
+
+            db.run(`CREATE TABLE "${storeName}" (${columnDefs});`);
+
+            const stmt = db.prepare(`INSERT INTO "${storeName}" VALUES (${columns.map(() => '?').join(',')})`);
+
+            for (const item of data) {
+                const values = columns.map(col => {
+                    const value = item[col];
+                    if (value === null || typeof value === 'undefined') {
+                        return null;
+                    }
+                    if (typeof value === 'object') {
+                        return JSON.stringify(value);
+                    }
+                    return String(value);
+                });
+                stmt.bind(values);
+                stmt.step();
+                stmt.reset();
+            }
+            stmt.free();
+        }
+
+        const data = db.export();
+        const blob = new Blob([data], { type: "application/x-sqlite3" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `estate-backup-${today()}.sqlite`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        document.body.removeChild(loadingEl);
+        alert('تم تصدير قاعدة البيانات بنجاح!');
+
+    } catch (err) {
+        console.error("SQLite export failed:", err);
+        alert('فشل تصدير قاعدة البيانات. راجع الكونسول لمزيد من التفاصيل.');
+        const loadingEl = document.querySelector('div[style*="position:fixed"]');
+        if (loadingEl) document.body.removeChild(loadingEl);
+    }
+  };
+  document.getElementById('import-sqlite-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!confirm('سيتم استبدال كل البيانات الحالية ببيانات ملف SQLite. هل أنت متأكد؟')) {
+        e.target.value = ''; // Reset file input
+        return;
+    }
+
+    const loadingEl = document.createElement('div');
+    loadingEl.textContent = 'جاري استيراد البيانات...';
+    loadingEl.style = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--brand);color:white;padding:10px 20px;border-radius:8px;z-index:2000;';
+    document.body.appendChild(loadingEl);
+
+    try {
+        const sql = await initSqlJs({
+            locateFile: filename => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${filename}`
+        });
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const Uints = new Uint8Array(event.target.result);
+                const db = new sql.Database(Uints);
+                const newState = {};
+
+                const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table';")[0].values;
+
+                for (const tableNameArr of tables) {
+                    const tableName = tableNameArr[0];
+                    const stmt = db.prepare(`SELECT * FROM "${tableName}"`);
+                    const data = [];
+                    while (stmt.step()) {
+                        const row = stmt.getAsObject();
+                        // Attempt to parse JSON strings back into objects/arrays
+                        Object.keys(row).forEach(key => {
+                            const val = row[key];
+                            if (typeof val === 'string' && (val.startsWith('{') || val.startsWith('['))) {
+                                try {
+                                    row[key] = JSON.parse(val);
+                                } catch (e) {
+                                    // Not a valid JSON string, leave as is
+                                }
+                            }
+                        });
+                        data.push(row);
+                    }
+                    newState[tableName] = data;
+                    stmt.free();
+                }
+
+                saveState(); // Save for undo
+
+                // Replace current state
+                Object.keys(state).forEach(key => {
+                    if(Array.isArray(state[key])) state[key] = [];
+                });
+                Object.assign(state, newState);
+
+                await persist();
+
+                document.body.removeChild(loadingEl);
+                alert('تم استيراد البيانات بنجاح! سيتم إعادة تحميل الصفحة.');
+                location.reload();
+
+            } catch (err) {
+                console.error("SQLite import error:", err);
+                alert('فشل استيراد الملف. قد يكون الملف تالفًا أو غير متوافق.');
+                if (loadingEl) document.body.removeChild(loadingEl);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+
+    } catch (err) {
+        console.error("Failed to initialize sql.js:", err);
+        alert('فشل تهيئة محرك قاعدة البيانات.');
+        if (loadingEl) document.body.removeChild(loadingEl);
+    }
+  };
+
   window.doBackup=()=>{
     const data=JSON.stringify(state);
     const blob=new Blob([data],{type:'application/json'});
@@ -3613,12 +4003,12 @@ function renderBackup(){
     const f=e.target.files[0]; if(!f) return;
     if(!confirm('سيتم استبدال كل البيانات الحالية. هل أنت متأكد؟')) return;
     const r=new FileReader();
-    r.onload=()=>{
+    r.onload= async ()=>{
       try{
         saveState();
         const restored=JSON.parse(String(r.result));
         Object.assign(state,restored);
-        persist();
+        await persist();
         alert('تمت الاستعادة بنجاح');
         nav('dash');
       }catch(err){ alert('ملف غير صالح'); }
@@ -3658,7 +4048,7 @@ function renderBackup(){
     if (!confirm('سيتم استبدال كل البيانات الحالية ببيانات ملف Excel. هل أنت متأكد؟')) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
         try {
             const data = event.target.result;
             const workbook = XLSX.read(data, { type: 'array' });
@@ -3689,7 +4079,7 @@ function renderBackup(){
 
             Object.keys(state).forEach(key => delete state[key]);
             Object.assign(state, newState);
-            persist();
+            await persist();
             alert('تمت استعادة البيانات من ملف Excel بنجاح.');
             nav('dash');
 
@@ -3701,10 +4091,21 @@ function renderBackup(){
     reader.readAsArrayBuffer(file);
   }
   document.getElementById('restore-excel-file').onchange = window.doExcelRestore;
-  window.doReset=()=>{
+  window.doReset= async ()=>{
     if(prompt('اكتب "مسح" لتأكيد حذف كل البيانات')==='مسح'){
       saveState();
+      // Clear state object
+      Object.keys(state).forEach(key => {
+          if(Array.isArray(state[key])) state[key] = [];
+          else if(typeof state[key] === 'object') state[key] = {};
+          else state[key] = null;
+      });
+      state.settings = {theme:'dark',font:16};
+      state.locked = false;
+
+      await persist(); // This will clear the IndexedDB
       localStorage.removeItem(APPKEY);
+      localStorage.removeItem(APPKEY + '_migrated_to_indexeddb');
       location.reload();
     }
   };
@@ -3737,7 +4138,7 @@ window.payBrokerDue = function(dueId) {
         <p style="color:var(--warn)">هل أنت متأكد؟</p>
     `;
 
-    showModal('تأكيد دفع عمولة سمسار', content, () => {
+    showModal('تأكيد دفع عمولة سمسار', content, async () => {
         if (safe.balance < due.amount) {
             alert(`رصيد الخزنة "${safe.name}" غير كافٍ.`);
             return false;
@@ -3769,7 +4170,7 @@ window.payBrokerDue = function(dueId) {
 
         logAction('دفع عمولة سمسار مستحقة', { brokerDueId: due.id, safeId: safeId, amount: due.amount });
 
-        persist();
+        await persist();
         nav(currentView, currentParam); // Refresh the current view
         return true;
     });
